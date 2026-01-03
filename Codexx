@@ -7883,6 +7883,199 @@ class AdvancedOrderFlow:
         
         print(f"\n   {'='*70}")
     
+    def _print_integrated_market_movement_analysis(self, snapshot, market_client):
+        """
+        Print Integrated Market Movement Analysis combining all data sources.
+        Shows who is moving the market with intelligent scoring.
+        """
+        if not market_client.market_movement_analyzer:
+            return
+        
+        print(f"\n  🎯 INTEGRATED MARKET MOVEMENT ANALYSIS:")
+        print(f"   {'='*70}")
+        print(f"   [Intelligent Multi-Source Market Direction Confirmation]")
+        
+        # Calculate current metrics
+        current_time = time.time()
+        metrics = market_client.market_movement_analyzer.calculate_market_movement_metrics(current_time)
+        
+        # Get quality score
+        quality_summary = market_client.stream_quality_monitor.get_summary() if market_client.stream_quality_monitor else {}
+        ofi_stats = market_client.ofi_calculator.get_ofi_statistics() if market_client.ofi_calculator else {}
+        
+        # === SECTION 1: Market Mover Identification ===
+        print(f"\n   🎯 WHO IS MOVING THE MARKET:")
+        market_mover = metrics.get('market_mover', 'UNKNOWN')
+        mover_strength = metrics.get('market_mover_strength', 'UNKNOWN')
+        net_pressure = metrics.get('net_market_pressure', 0.0)
+        
+        # Color code based on direction
+        if market_mover == "BUYERS":
+            emoji = "🟢"
+            direction_color = "BULLISH"
+        elif market_mover == "SELLERS":
+            emoji = "🔴"
+            direction_color = "BEARISH"
+        else:
+            emoji = "⚪"
+            direction_color = "NEUTRAL"
+        
+        print(f"      {emoji} MARKET MOVER: {market_mover}")
+        print(f"      💪 STRENGTH: {mover_strength}")
+        print(f"      📊 NET PRESSURE: {net_pressure:+.2f}")
+        print(f"      🎨 DIRECTION: {direction_color}")
+        
+        # === SECTION 2: Confirmation Scores ===
+        print(f"\n   ✅ MULTI-SOURCE CONFIRMATION SCORES:")
+        
+        # Calculate individual confirmation scores
+        buyer_pressure = metrics.get('buyer_pressure_score', 0.0)
+        seller_pressure = metrics.get('seller_pressure_score', 0.0)
+        buyer_dominance = metrics.get('buyer_dominance_pct', 50.0)
+        aggressive_buy_ratio = metrics.get('aggressive_buy_ratio_pct', 50.0)
+        
+        # Intelligent scoring system (0-100)
+        pressure_score = min(100, max(0, 50 + net_pressure * 2))
+        volume_score = buyer_dominance if market_mover == "BUYERS" else (100 - buyer_dominance)
+        aggression_score = aggressive_buy_ratio if market_mover == "BUYERS" else (100 - aggressive_buy_ratio)
+        
+        # Overall confidence score (weighted average)
+        confidence_score = (pressure_score * 0.4 + volume_score * 0.3 + aggression_score * 0.3)
+        
+        print(f"      📈 Pressure Score:    {pressure_score:.1f}/100")
+        print(f"      📊 Volume Score:      {volume_score:.1f}/100")
+        print(f"      ⚡ Aggression Score:  {aggression_score:.1f}/100")
+        print(f"      🎯 CONFIDENCE:        {confidence_score:.1f}/100")
+        
+        # Confidence interpretation
+        if confidence_score >= 80:
+            conf_status = "🟢 VERY HIGH - Strong directional conviction"
+        elif confidence_score >= 60:
+            conf_status = "🟡 HIGH - Good directional signal"
+        elif confidence_score >= 40:
+            conf_status = "🟠 MODERATE - Mixed signals"
+        else:
+            conf_status = "🔴 LOW - Unclear direction"
+        print(f"      └─ {conf_status}")
+        
+        # === SECTION 3: Volume Analysis ===
+        print(f"\n   📊 VOLUME BREAKDOWN:")
+        total_buy_vol = metrics.get('total_buy_volume', 0.0)
+        total_sell_vol = metrics.get('total_sell_volume', 0.0)
+        agg_buy_vol = metrics.get('aggressive_buyer_volume', 0.0)
+        agg_sell_vol = metrics.get('aggressive_seller_volume', 0.0)
+        
+        print(f"      • Total Buy:  {total_buy_vol:.4f} BTC ({buyer_dominance:.1f}%)")
+        print(f"      • Total Sell: {total_sell_vol:.4f} BTC ({100-buyer_dominance:.1f}%)")
+        print(f"      • Aggressive Buys:  {agg_buy_vol:.4f} BTC")
+        print(f"      • Aggressive Sells: {agg_sell_vol:.4f} BTC")
+        
+        # === SECTION 4: Smart Money Detection ===
+        print(f"\n   🐋 SMART MONEY vs RETAIL:")
+        inst_buy = metrics.get('institutional_buy_volume', 0.0)
+        inst_sell = metrics.get('institutional_sell_volume', 0.0)
+        retail_buy = metrics.get('retail_buy_volume', 0.0)
+        retail_sell = metrics.get('retail_sell_volume', 0.0)
+        inst_retail_ratio = metrics.get('inst_retail_ratio', 0.0)
+        
+        print(f"      🏦 Institutional Buys:  {inst_buy:.4f} BTC")
+        print(f"      🏦 Institutional Sells: {inst_sell:.4f} BTC")
+        print(f"      👥 Retail Buys:  {retail_buy:.4f} BTC")
+        print(f"      👥 Retail Sells: {retail_sell:.4f} BTC")
+        print(f"      📊 Inst/Retail Ratio: {inst_retail_ratio:.2f}x")
+        
+        if inst_retail_ratio > 2.0:
+            print(f"      └─ 🐋 INSTITUTIONAL DOMINANCE - Follow smart money")
+        elif inst_retail_ratio > 1.0:
+            print(f"      └─ 🏦 Institutional participation above average")
+        else:
+            print(f"      └─ 👥 Retail-driven market activity")
+        
+        # === SECTION 5: Market Impact ===
+        print(f"\n   💥 MARKET IMPACT ANALYSIS:")
+        buy_impact = metrics.get('avg_buy_market_impact', 0.0)
+        sell_impact = metrics.get('avg_sell_market_impact', 0.0)
+        buy_impact_stronger = metrics.get('buy_impact_stronger', False)
+        
+        print(f"      • Avg Buy Impact:  {buy_impact:.6f}")
+        print(f"      • Avg Sell Impact: {sell_impact:.6f}")
+        print(f"      • Stronger Impact: {'BUYS' if buy_impact_stronger else 'SELLS'}")
+        
+        # === SECTION 6: Coordinated Activity ===
+        coordinated_buying = metrics.get('coordinated_buying_events', 0)
+        coordinated_selling = metrics.get('coordinated_selling_events', 0)
+        
+        if coordinated_buying > 0 or coordinated_selling > 0:
+            print(f"\n   🎭 COORDINATED ACTIVITY DETECTED:")
+            if coordinated_buying > 0:
+                print(f"      🟢 Coordinated Buying Events: {coordinated_buying}")
+                print(f"         └─ Suggests organized accumulation")
+            if coordinated_selling > 0:
+                print(f"      🔴 Coordinated Selling Events: {coordinated_selling}")
+                print(f"         └─ Suggests organized distribution")
+        
+        # === SECTION 7: Data Quality ===
+        print(f"\n   📡 DATA QUALITY & SOURCES:")
+        ob_count = metrics.get('orderbook_snapshots_count', 0)
+        bt_count = metrics.get('bookticker_updates_count', 0)
+        agg_count = metrics.get('aggtrades_count', 0)
+        trade_count = metrics.get('trades_count', 0)
+        
+        print(f"      • OrderBook Snapshots: {ob_count}")
+        print(f"      • BookTicker Updates:  {bt_count}")
+        print(f"      • AggTrades:           {agg_count}")
+        print(f"      • Individual Trades:   {trade_count}")
+        
+        if quality_summary:
+            quality_score = quality_summary.get('quality_score', 0.0)
+            health_status = quality_summary.get('health_status', 'UNKNOWN')
+            print(f"      • Stream Quality:      {quality_score:.1f}/100 ({health_status})")
+        
+        # === SECTION 8: Order Flow Imbalance ===
+        if ofi_stats:
+            print(f"\n   ⚖️ ORDER FLOW IMBALANCE (OFI):")
+            mean_ofi = ofi_stats.get('mean_ofi', 0.0)
+            ofi_direction = "🟢 BUYING" if mean_ofi > 0 else "🔴 SELLING" if mean_ofi < 0 else "⚪ NEUTRAL"
+            pos_ratio = ofi_stats.get('positive_ofi_ratio', 0.5) * 100
+            
+            print(f"      • Mean OFI: {mean_ofi:+.4f}")
+            print(f"      • Direction: {ofi_direction}")
+            print(f"      • Positive OFI Ratio: {pos_ratio:.1f}%")
+        
+        # === SECTION 9: Trading Implications ===
+        print(f"\n   💡 TRADING IMPLICATIONS:")
+        implications = []
+        
+        if confidence_score >= 70:
+            if market_mover == "BUYERS":
+                implications.append("🟢 STRONG BUY SIGNAL - Consider long positions")
+            elif market_mover == "SELLERS":
+                implications.append("🔴 STRONG SELL SIGNAL - Consider short positions or exit longs")
+        
+        if inst_retail_ratio > 2.0 and market_mover != "BALANCED":
+            implications.append("🐋 Smart money leading - High probability directional move")
+        
+        if coordinated_buying > 2:
+            implications.append("🎭 Multiple coordinated buy events - Potential accumulation phase")
+        elif coordinated_selling > 2:
+            implications.append("🎭 Multiple coordinated sell events - Potential distribution phase")
+        
+        if buy_impact_stronger and market_mover == "BUYERS":
+            implications.append("💥 High buy impact - Strong demand absorbing supply")
+        elif not buy_impact_stronger and market_mover == "SELLERS":
+            implications.append("💥 High sell impact - Strong supply overwhelming demand")
+        
+        if confidence_score < 40:
+            implications.append("⚠️ LOW CONFIDENCE - Wait for clearer signals")
+        
+        if implications:
+            for impl in implications:
+                print(f"      → {impl}")
+        else:
+            print(f"      → ℹ️ Market in equilibrium - No strong directional bias")
+        
+        print(f"\n   {'='*70}")
+    
     def _print_time_weighted_metrics(self, snapshot):
         """
         Print Order Book Time-Weighted Metrics analysis.
@@ -9224,9 +9417,19 @@ class MarketClient:
             self.feature_extractor = FeatureExtractor(window_size=100)
             self.last_advanced_snapshot = datetime.now(timezone.utc)
             print(f"[{self.name}] ✅ Advanced Order Flow Analysis enabled (30s intervals)")
+            
+            # ─── Integrated Market Movement Analyzer ─────────────
+            self.market_movement_analyzer = IntegratedMarketMovementAnalyzer(window_seconds=30)
+            self.stream_quality_monitor = TradeStreamQualityMonitor(alert_threshold_ms=1000.0)
+            self.ofi_calculator = OrderFlowImbalanceCalculator(num_levels=10)
+            self.last_market_movement_display = datetime.now(timezone.utc)
+            print(f"[{self.name}] ✅ Integrated Market Movement Analyzer enabled")
         else:
             self.advanced_orderflow = None
             self.feature_extractor = None
+            self.market_movement_analyzer = None
+            self.stream_quality_monitor = None
+            self.ofi_calculator = None
 
         # ─── Price‐Action Buffers ────────────────────────────
         self.prev_bar       = None  # store previous bar dict
@@ -9463,6 +9666,14 @@ class MarketClient:
                 # Enable full depth mode to merge with 1000-level REST data
                 self.advanced_orderflow.process_depth_snapshot(ts_now, bids, asks, use_full_depth=True)
                 
+                # Feed to Integrated Market Movement Analyzer
+                if self.market_movement_analyzer:
+                    self.market_movement_analyzer.add_orderbook_snapshot(ts_now, bids, asks)
+                
+                # Feed to OFI Calculator
+                if self.ofi_calculator and self.prev_mid:
+                    self.ofi_calculator.calculate_ofi(ts_now, bids, asks, self.prev_mid)
+                
                 # Track latency: exchange timestamp vs client timestamp
                 if "E" in d:  # Event timestamp from exchange
                     exchange_ts = d["E"] / 1000  # Convert from milliseconds
@@ -9548,6 +9759,13 @@ class MarketClient:
                 if self.advanced_orderflow.depth_snapshots:
                     last_depth_ts = self.advanced_orderflow.depth_snapshots[-1][0]
                     self.advanced_orderflow.correlate_depth_trade(last_depth_ts, ts_t)
+                
+                # Feed to Integrated Market Movement Analyzer
+                if self.market_movement_analyzer:
+                    is_buyer_maker = d.get("m", False)
+                    self.market_movement_analyzer.add_aggtrade(
+                        ts_t, p, q, is_buyer_maker
+                    )
 
         # 3) Trade ticks - ENHANCED: Now feeds to AdvancedOrderFlow
         elif s.endswith("@trade"):
@@ -9573,6 +9791,19 @@ class MarketClient:
                     trade_id=trade_id,
                     exchange_timestamp=exchange_ts
                 )
+                
+                # Feed to Integrated Market Movement Analyzer
+                if self.market_movement_analyzer:
+                    self.market_movement_analyzer.add_trade(
+                        ts_now, price, qty, side, is_aggressive=True
+                    )
+                
+                # Feed to Stream Quality Monitor
+                if self.stream_quality_monitor:
+                    client_ts = time.time() * 1000  # Current time in ms
+                    self.stream_quality_monitor.check_trade(
+                        trade_id, exchange_ts, client_ts
+                    )
 
         # 4) Liquidations (forceOrder)
         elif s.endswith("@forceOrder"):
@@ -9629,6 +9860,13 @@ class MarketClient:
             if self.last_bid_vol > 0 or self.last_ask_vol > 0:
                 quote_pressure = (self.last_bid_vol - self.last_ask_vol) / (self.last_bid_vol + self.last_ask_vol + 1e-10)
                 self.quote_pressure_history.append((ts_m.timestamp(), quote_pressure))
+            
+            # Feed to Integrated Market Movement Analyzer
+            if self.market_movement_analyzer:
+                self.market_movement_analyzer.add_bookticker_update(
+                    ts_m.timestamp(), self.last_bid, self.last_ask,
+                    self.last_bid_vol, self.last_ask_vol
+                )
 
         # 6) markPrice
         elif s.endswith("@markPrice"):
@@ -9788,6 +10026,10 @@ class MarketClient:
             # Print Composite Index analysis (basis tracking & arbitrage detection)
             if self.advanced_orderflow:
                 self.advanced_orderflow._print_composite_index_analysis(snapshot, self)
+            
+            # Print Integrated Market Movement Analysis (WHO IS MOVING THE MARKET)
+            if self.advanced_orderflow and self.market_movement_analyzer:
+                self.advanced_orderflow._print_integrated_market_movement_analysis(snapshot, self)
             
             # Print Time-Weighted Metrics analysis (TWAS, decay-adjusted liquidity, persistence)
             if self.advanced_orderflow:
