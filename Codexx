@@ -13066,6 +13066,16 @@ class IntegratedMarketMovementAnalyzer:
     - Coordinated buying/selling pattern detection
     """
     
+    # Configuration constants
+    IMBALANCE_THRESHOLD = 0.2           # Minimum imbalance to be considered significant
+    IMBALANCE_PRESSURE_MULTIPLIER = 5.0 # Multiplier for imbalance pressure scoring
+    NOTIONAL_PRESSURE_DIVISOR = 10000   # Scaling divisor for notional pressure ($10k)
+    INSTITUTIONAL_THRESHOLD = 100000    # Minimum notional for institutional classification ($100k)
+    COORDINATED_MIN_TRADES = 10         # Minimum trades to detect coordination
+    PRESSURE_DECAY_FACTOR = 0.95        # Exponential decay factor for pressure scores
+    STRONG_PRESSURE_THRESHOLD = 20.0    # Threshold for "STRONG" market mover classification
+    MODERATE_PRESSURE_THRESHOLD = 10.0  # Threshold for "MODERATE" market mover classification
+    
     def __init__(self, window_seconds: int = 30):
         """
         Initialize the integrated market movement analyzer.
@@ -13169,15 +13179,23 @@ class IntegratedMarketMovementAnalyzer:
     def _analyze_depth_changes(self, timestamp: float, bids: List[Tuple[float, float]], 
                                asks: List[Tuple[float, float]]):
         """Analyze orderbook depth changes to detect accumulation/distribution."""
-        if len(self.orderbook_snapshots) < 2:
+        if len(self.orderbook_snapshots) < 2 or not bids or not asks:
             return
             
         # Compare with previous snapshot
         prev_timestamp, prev_bids, prev_asks = self.orderbook_snapshots[-2]
         
-        # Calculate depth changes at top levels
-        bid_depth_change = sum(q for p, q in bids[:10]) - sum(q for p, q in prev_bids[:10]) if prev_bids else 0
-        ask_depth_change = sum(q for p, q in asks[:10]) - sum(q for p, q in prev_asks[:10]) if prev_asks else 0
+        if not prev_bids or not prev_asks:
+            return
+        
+        # Calculate depth changes at top levels (safely handle empty lists)
+        current_bid_depth = sum(q for p, q in bids[:10]) if bids else 0
+        prev_bid_depth = sum(q for p, q in prev_bids[:10]) if prev_bids else 0
+        bid_depth_change = current_bid_depth - prev_bid_depth
+        
+        current_ask_depth = sum(q for p, q in asks[:10]) if asks else 0
+        prev_ask_depth = sum(q for p, q in prev_asks[:10]) if prev_asks else 0
+        ask_depth_change = current_ask_depth - prev_ask_depth
         
         # Increasing bid depth = buying interest
         # Decreasing ask depth = buying pressure (asks being taken)
@@ -13204,10 +13222,10 @@ class IntegratedMarketMovementAnalyzer:
             
             # Positive imbalance = more bids (buying pressure)
             # Negative imbalance = more asks (selling pressure)
-            if imbalance > 0.2:
-                self.buyer_pressure_score += imbalance * 5
-            elif imbalance < -0.2:
-                self.seller_pressure_score += abs(imbalance) * 5
+            if imbalance > self.IMBALANCE_THRESHOLD:
+                self.buyer_pressure_score += imbalance * self.IMBALANCE_PRESSURE_MULTIPLIER
+            elif imbalance < -self.IMBALANCE_THRESHOLD:
+                self.seller_pressure_score += abs(imbalance) * self.IMBALANCE_PRESSURE_MULTIPLIER
                 
     def _analyze_trade_flow(self, timestamp: float, price: float, quantity: float,
                            is_buyer_maker: bool):
@@ -13218,15 +13236,15 @@ class IntegratedMarketMovementAnalyzer:
             # Buyer was maker (passive), seller was taker (aggressive)
             self.aggressive_seller_volume += quantity
             self.passive_buyer_volume += quantity
-            self.seller_pressure_score += min(5, notional / 10000)  # Scale by $10k
+            self.seller_pressure_score += min(5, notional / self.NOTIONAL_PRESSURE_DIVISOR)
         else:
             # Seller was maker (passive), buyer was taker (aggressive)
             self.aggressive_buyer_volume += quantity
             self.passive_seller_volume += quantity
-            self.buyer_pressure_score += min(5, notional / 10000)
+            self.buyer_pressure_score += min(5, notional / self.NOTIONAL_PRESSURE_DIVISOR)
             
-        # Detect large institutional trades (>$100k)
-        if notional > 100000:
+        # Detect large institutional trades
+        if notional > self.INSTITUTIONAL_THRESHOLD:
             if is_buyer_maker:
                 self.institutional_sell_volume += quantity
             else:
@@ -13285,7 +13303,7 @@ class IntegratedMarketMovementAnalyzer:
         buy_trades = [t for t in recent_trades if t[3] == "Buy"]
         agg_buy_trades = [t for t in recent_aggtrades if not t[3]]  # not is_buyer_maker = aggressive buy
         
-        if len(buy_trades) > 10 and len(agg_buy_trades) > 10:
+        if len(buy_trades) > self.COORDINATED_MIN_TRADES and len(agg_buy_trades) > self.COORDINATED_MIN_TRADES:
             # Calculate clustering
             buy_volume = sum(t[2] for t in buy_trades)
             agg_buy_volume = sum(t[2] for t in agg_buy_trades)
@@ -13298,7 +13316,7 @@ class IntegratedMarketMovementAnalyzer:
         sell_trades = [t for t in recent_trades if t[3] == "Sell"]
         agg_sell_trades = [t for t in recent_aggtrades if t[3]]  # is_buyer_maker = aggressive sell
         
-        if len(sell_trades) > 10 and len(agg_sell_trades) > 10:
+        if len(sell_trades) > self.COORDINATED_MIN_TRADES and len(agg_sell_trades) > self.COORDINATED_MIN_TRADES:
             sell_volume = sum(t[2] for t in sell_trades)
             agg_sell_volume = sum(t[2] for t in agg_sell_trades)
             
@@ -13322,9 +13340,8 @@ class IntegratedMarketMovementAnalyzer:
         self._detect_coordinated_activity(timestamp)
         
         # Decay pressure scores over time (exponential decay)
-        decay_factor = 0.95
-        self.buyer_pressure_score *= decay_factor
-        self.seller_pressure_score *= decay_factor
+        self.buyer_pressure_score *= self.PRESSURE_DECAY_FACTOR
+        self.seller_pressure_score *= self.PRESSURE_DECAY_FACTOR
         
         # Calculate net pressure
         self.net_market_pressure = self.buyer_pressure_score - self.seller_pressure_score
@@ -13355,16 +13372,16 @@ class IntegratedMarketMovementAnalyzer:
         avg_sell_impact = safe_mean(list(self.sell_market_impact)[-100:], 0.0) if self.sell_market_impact else 0.0
         
         # Determine who is moving the market
-        if self.net_market_pressure > 20:
+        if self.net_market_pressure > self.STRONG_PRESSURE_THRESHOLD:
             market_mover = "BUYERS"
             market_mover_strength = "STRONG"
-        elif self.net_market_pressure > 10:
+        elif self.net_market_pressure > self.MODERATE_PRESSURE_THRESHOLD:
             market_mover = "BUYERS"
             market_mover_strength = "MODERATE"
-        elif self.net_market_pressure < -20:
+        elif self.net_market_pressure < -self.STRONG_PRESSURE_THRESHOLD:
             market_mover = "SELLERS"
             market_mover_strength = "STRONG"
-        elif self.net_market_pressure < -10:
+        elif self.net_market_pressure < -self.MODERATE_PRESSURE_THRESHOLD:
             market_mover = "SELLERS"
             market_mover_strength = "MODERATE"
         else:
