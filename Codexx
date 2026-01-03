@@ -7888,20 +7888,31 @@ class AdvancedOrderFlow:
         Print Integrated Market Movement Analysis combining all data sources.
         Shows who is moving the market with intelligent scoring.
         """
-        if not market_client.market_movement_analyzer:
+        # Check if analyzer exists and is properly initialized
+        if not hasattr(market_client, 'market_movement_analyzer') or not market_client.market_movement_analyzer:
             return
         
-        print(f"\n  🎯 INTEGRATED MARKET MOVEMENT ANALYSIS:")
-        print(f"   {'='*70}")
-        print(f"   [Intelligent Multi-Source Market Direction Confirmation]")
-        
-        # Calculate current metrics
-        current_time = time.time()
-        metrics = market_client.market_movement_analyzer.calculate_market_movement_metrics(current_time)
-        
-        # Get quality score
-        quality_summary = market_client.stream_quality_monitor.get_summary() if market_client.stream_quality_monitor else {}
-        ofi_stats = market_client.ofi_calculator.get_ofi_statistics() if market_client.ofi_calculator else {}
+        try:
+            print(f"\n  🎯 INTEGRATED MARKET MOVEMENT ANALYSIS:")
+            print(f"   {'='*70}")
+            print(f"   [Intelligent Multi-Source Market Direction Confirmation]")
+            
+            # Calculate current metrics
+            import time as time_module
+            current_time = time_module.time()
+            metrics = market_client.market_movement_analyzer.calculate_market_movement_metrics(current_time)
+            
+            # Get quality score
+            quality_summary = {}
+            if hasattr(market_client, 'stream_quality_monitor') and market_client.stream_quality_monitor:
+                quality_summary = market_client.stream_quality_monitor.get_summary()
+            
+            ofi_stats = {}
+            if hasattr(market_client, 'ofi_calculator') and market_client.ofi_calculator:
+                ofi_stats = market_client.ofi_calculator.get_ofi_statistics()
+        except Exception as e:
+            logger.warning(f"Error in integrated market movement analysis display: {e}", exc_info=True)
+            return
         
         # === SECTION 1: Market Mover Identification ===
         print(f"\n   🎯 WHO IS MOVING THE MARKET:")
