@@ -2185,9 +2185,9 @@ class EnhancedLiquidityHeatmapAnalyzer:
         Returns:
             Dictionary with all liquidity metrics and insights
         """
-        # Count active walls
-        bid_walls_count = len([w for w in self.liquidity_walls['BID']])
-        ask_walls_count = len([w for w in self.liquidity_walls['ASK']])
+        # Get actual walls (not just counts)
+        bid_walls_list = list(self.liquidity_walls['BID'])
+        ask_walls_list = list(self.liquidity_walls['ASK'])
         
         # Calculate average absorption rate
         recent_absorption = self.absorption_history[-20:] if len(self.absorption_history) >= 20 else self.absorption_history
@@ -2196,18 +2196,25 @@ class EnhancedLiquidityHeatmapAnalyzer:
         # Count vacuum zones
         recent_vacuums = [vz for vz in self.vacuum_zones if len(self.vacuum_zones) > 0]
         
+        # Get last absorption event if any
+        last_absorption = recent_absorption[-1] if recent_absorption else None
+        
         return {
             'liquidity_walls': {
-                'bid_walls': bid_walls_count,
-                'ask_walls': ask_walls_count,
+                'bid_walls': bid_walls_list,
+                'ask_walls': ask_walls_list,
+                'total_walls': len(bid_walls_list) + len(ask_walls_list),
                 'top_support': self.top_support_level,
                 'top_resistance': self.top_resistance_level
             },
             'absorption': {
                 'avg_rate': avg_absorption_rate,
-                'recent_events': len(recent_absorption)
+                'active_events': len(recent_absorption),
+                'last_event': last_absorption
             },
             'vacuum_zones': {
+                'bid_gaps': [vz for vz in recent_vacuums if vz[0] == 'BID'],
+                'ask_gaps': [vz for vz in recent_vacuums if vz[0] == 'ASK'],
                 'count': len(recent_vacuums),
                 'largest_gap': max([g for _, _, _, g in recent_vacuums], default=0.0)
             },
@@ -11075,42 +11082,53 @@ class MarketClient:
             print(f"      Average: {avg_rate:.1f} BTC/sec")
             print(f"      Active events: {active_events}")
             
-            if absorption.get('last_event'):
-                last = absorption['last_event']
-                print(f"      Last event: ${last['price']:,.2f} absorbed {last['volume']:.1f} BTC at {last['rate']:.1f} BTC/sec")
+            # Handle last_event which is a tuple: (timestamp, price, volume, duration, rate)
+            last_event = absorption.get('last_event')
+            if last_event and isinstance(last_event, tuple) and len(last_event) == 5:
+                _, price, volume, _, rate = last_event
+                print(f"      Last event: ${price:,.2f} absorbed {volume:.1f} BTC at {rate:.1f} BTC/sec")
             
             # Section 3: Vacuum Zones
             vacuum = summary.get('vacuum_zones', {})
             bid_gaps = vacuum.get('bid_gaps', [])
             ask_gaps = vacuum.get('ask_gaps', [])
             
-            print(f"\n   🌪️ VACUUM ZONES (Low Liquidity):")
-            print(f"      Bid side: {len(bid_gaps)} gaps (avg ${vacuum.get('avg_bid_gap', 0):.1f})")
-            print(f"      Ask side: {len(ask_gaps)} gaps (avg ${vacuum.get('avg_ask_gap', 0):.1f})")
+            # Calculate average gap sizes
+            avg_bid_gap = safe_mean([g for _, _, _, g in bid_gaps], 0.0) if bid_gaps else 0.0
+            avg_ask_gap = safe_mean([g for _, _, _, g in ask_gaps], 0.0) if ask_gaps else 0.0
             
-            if len(ask_gaps) > len(bid_gaps) and vacuum.get('avg_ask_gap', 0) > 50:
+            print(f"\n   🌪️ VACUUM ZONES (Low Liquidity):")
+            print(f"      Bid side: {len(bid_gaps)} gaps" + (f" (avg ${avg_bid_gap:.1f})" if bid_gaps else ""))
+            print(f"      Ask side: {len(ask_gaps)} gaps" + (f" (avg ${avg_ask_gap:.1f})" if ask_gaps else ""))
+            
+            if len(ask_gaps) > len(bid_gaps) and avg_ask_gap > 50:
                 print(f"      ⚠️ HIGH SLIPPAGE RISK on ask side")
-            elif len(bid_gaps) > len(ask_gaps) and vacuum.get('avg_bid_gap', 0) > 50:
+            elif len(bid_gaps) > len(ask_gaps) and avg_bid_gap > 50:
                 print(f"      ⚠️ HIGH SLIPPAGE RISK on bid side")
+            elif not bid_gaps and not ask_gaps:
+                print(f"      ✅ Normal liquidity distribution")
             
             # Section 4: Concentration Metrics
             concentration = summary.get('concentration', {})
             score = concentration.get('score', 0)
             interpretation = concentration.get('interpretation', 'N/A')
-            top_support = concentration.get('top_support', [])
-            top_resistance = concentration.get('top_resistance', [])
+            
+            # Get top support/resistance from liquidity_walls, not concentration
+            top_support = walls.get('top_support', [])
+            top_resistance = walls.get('top_resistance', [])
             
             print(f"\n   🎯 LIQUIDITY CONCENTRATION:")
             print(f"      Score: {score:.2f} ({interpretation})")
             
-            if top_support:
+            if top_support and len(top_support) > 0:
                 print(f"      Top Support Levels:")
                 for i, (price, vol) in enumerate(top_support[:3], 1):
                     print(f"         {i}. ${price:,.2f}: {vol:.1f} BTC")
             
-            if top_resistance:
+            if top_resistance and len(top_resistance) > 0:
                 print(f"      Top Resistance Levels:")
                 for i, (price, vol) in enumerate(top_resistance[:3], 1):
+                    print(f"         {i}. ${price:,.2f}: {vol:.1f} BTC")
                     print(f"         {i}. ${price:,.2f}: {vol:.1f} BTC")
             
         except Exception as e:
