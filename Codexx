@@ -11053,9 +11053,8 @@ class MarketClient:
             if bid_walls:
                 print(f"      🟢 BID WALLS:")
                 for wall in bid_walls[:3]:  # Top 3
-                    price = wall['price']
-                    volume = wall['volume']
-                    strength = wall['strength']
+                    # Wall is a tuple: (timestamp, price, volume, wall_strength)
+                    timestamp_wall, price, volume, strength = wall
                     print(f"         • ${price:,.2f}: {volume:.1f} BTC ({strength:.1f}x avg) - STRONG SUPPORT")
             else:
                 print(f"      🟢 No significant bid walls detected")
@@ -11063,9 +11062,8 @@ class MarketClient:
             if ask_walls:
                 print(f"      🔴 ASK WALLS:")
                 for wall in ask_walls[:3]:  # Top 3
-                    price = wall['price']
-                    volume = wall['volume']
-                    strength = wall['strength']
+                    # Wall is a tuple: (timestamp, price, volume, wall_strength)
+                    timestamp_wall, price, volume, strength = wall
                     print(f"         • ${price:,.2f}: {volume:.1f} BTC ({strength:.1f}x avg) - STRONG RESISTANCE")
             else:
                 print(f"      🔴 No significant ask walls detected")
