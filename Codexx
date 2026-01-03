@@ -5,16 +5,17 @@ import logging
 from collections import deque, defaultdict, Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Union
 
-# Configure module logger - application can override via logging.getLogger(__name__).setLevel()
+# Configure module logger - application can override via logging configuration
 logger = logging.getLogger(__name__)
-if not logger.handlers:
-    # Only add handler if none exists (allows application to configure)
+# Set default level to INFO, but allow application to override
+if not logger.handlers and not logging.getLogger().handlers:
+    # Only add handler if neither module nor root logger has handlers
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
     logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+logger.setLevel(logging.INFO)
 
 
 # ============================================================
@@ -111,7 +112,7 @@ def safe_max(collection: List[float], default: float = 0.0) -> float:
     except (ValueError, TypeError):
         return default
 
-def is_data_fresh(timestamp: Optional[Any], max_age_seconds: float = 5.0) -> bool:
+def is_data_fresh(timestamp: Optional[Union[float, datetime]], max_age_seconds: float = 5.0) -> bool:
     """
     Check if data is fresh (less than max_age_seconds old).
     Returns True if fresh, False if stale.
@@ -1345,7 +1346,7 @@ class SpreadDecompositionAnalyzer:
                 'information_component_bps': float(abs(adverse_selection) * np.mean(volumes) * 10000) if prices[-1] > 0 else 0,
             }
         except (ValueError, IndexError, ZeroDivisionError) as e:
-            logger.debug(f"Glosten-Harris decomposition failed: {e}")
+            logger.debug("Glosten-Harris decomposition failed", exc_info=True)
             return {
                 'adverse_selection_lambda': 0.0,
                 'processing_cost': 0.0,
@@ -5771,7 +5772,7 @@ class AdvancedOrderFlow:
                     self.depth_skewness_bid = 0.0
                     self.skewness_interpretation_bid = "neutral"
             except (ValueError, ZeroDivisionError, OverflowError) as e:
-                logger.debug(f"Skewness calculation failed for bid volumes: {e}")
+                logger.debug("Skewness calculation failed for bid volumes", exc_info=True)
                 self.depth_skewness_bid = 0.0
                 self.skewness_interpretation_bid = "neutral"
         else:
@@ -5797,7 +5798,7 @@ class AdvancedOrderFlow:
                     self.depth_skewness_ask = 0.0
                     self.skewness_interpretation_ask = "neutral"
             except (ValueError, ZeroDivisionError, OverflowError) as e:
-                logger.debug(f"Skewness calculation failed for ask volumes: {e}")
+                logger.debug("Skewness calculation failed for ask volumes", exc_info=True)
                 self.depth_skewness_ask = 0.0
                 self.skewness_interpretation_ask = "neutral"
         else:
@@ -7089,7 +7090,7 @@ class AdvancedOrderFlow:
                     else:
                         print(f"      → 📊 Normal OI-Liquidation dynamics")
             except (IndexError, ValueError, KeyError) as e:
-                logger.debug(f"OI-Liquidation analysis failed: {e}")
+                logger.debug("OI-Liquidation analysis failed", exc_info=True)
         
         # ===== SECTION 5: Trading Implications =====
         print(f"\n   💡 TRADING IMPLICATIONS:")
@@ -10915,7 +10916,7 @@ class MarketClient:
             feat["OFI_L1"] = self.calc_order_flow_imbalance(self.prev_l1, self.curr_l1)
             feat["OFI_L5"] = self.calc_order_flow_imbalance(self.prev_l5, self.curr_l5)
         except (ValueError, KeyError, AttributeError) as e:
-            logger.debug(f"OFI calculation failed: {e}")
+            logger.debug("OFI calculation failed", exc_info=True)
             feat["OFI_L1"] = None
             feat["OFI_L5"] = None
 
@@ -11369,7 +11370,7 @@ class MarketClient:
                         corr = statistics.correlation(oi_values, funding_values)
                         self.advanced_orderflow.oi_funding_correlation = corr
                 except (ValueError, KeyError, IndexError) as e:
-                    logger.debug(f"OI-Funding correlation calculation failed: {e}")
+                    logger.debug("OI-Funding correlation calculation failed", exc_info=True)
             
             # Calculate correlation with mark price
             if len(self.mid_price_history) >= 20:
@@ -11389,7 +11390,7 @@ class MarketClient:
                         corr = statistics.correlation(oi_values, mark_prices)
                         self.advanced_orderflow.oi_price_correlation = corr
                 except (ValueError, KeyError, IndexError) as e:
-                    logger.debug(f"OI-Price correlation calculation failed: {e}")
+                    logger.debug("OI-Price correlation calculation failed", exc_info=True)
 
     async def proc_ticker(self, name, data, ts):
         if isinstance(data, list) and data:
