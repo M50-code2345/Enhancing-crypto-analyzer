@@ -8595,6 +8595,15 @@ class AdvancedOrderFlow:
             print(f"         • Standard position sizing appropriate")
         
         print(f"\n   {'='*70}")
+        
+        # ═══════════════════════════════════════════════════════════════════════
+        # Display Enhanced Liquidity Heatmap Analysis after TRADING IMPLICATIONS
+        # ═══════════════════════════════════════════════════════════════════════
+        if self.liquidity_heatmap_analyzer:
+            current_time = datetime.now(timezone.utc)
+            if (current_time - self.last_liquidity_display).total_seconds() >= 30:
+                self.last_liquidity_display = current_time
+                self._print_enhanced_liquidity_analysis()
 
 
 
@@ -11017,15 +11026,6 @@ class MarketClient:
                     print(f"           Order Modifications: {modifications}")
         
         print(f"        ✅ Enhanced precision with 5000+ sample buffers and full depth tracking")
-        
-        # ═══════════════════════════════════════════════════════════════════════
-        # Display Enhanced Liquidity Heatmap Analysis
-        # ═══════════════════════════════════════════════════════════════════════
-        if self.liquidity_heatmap_analyzer:
-            current_time = datetime.now(timezone.utc)
-            if (current_time - self.last_liquidity_display).total_seconds() >= 30:
-                self.last_liquidity_display = current_time
-                self._print_enhanced_liquidity_analysis()
 
     def _print_enhanced_liquidity_analysis(self):
         """Display comprehensive liquidity heatmap analysis."""
