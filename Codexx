@@ -1,10 +1,15 @@
 import math
 import time
 import statistics
+import logging
 from collections import deque, defaultdict, Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Tuple, Optional, Any
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -194,7 +199,7 @@ class EnhancedSpreadCalculator:
     def __init__(self):
         self.spread_history = deque(maxlen=1000)
         
-    def calculate_spread(self, best_bid: float, best_ask: float) -> Dict[str, any]:
+    def calculate_spread(self, best_bid: float, best_ask: float) -> Dict[str, Any]:
         """
         Calculate spread with high precision using Decimal type.
         
@@ -261,7 +266,7 @@ class AsymmetricWallDetector:
     def detect_walls(self, 
                     bids: List[Tuple[float, float]], 
                     asks: List[Tuple[float, float]],
-                    min_levels: int = 10) -> Dict[str, any]:
+                    min_levels: int = 10) -> Dict[str, Any]:
         """
         Detect liquidity walls with asymmetric thresholds.
         
@@ -414,7 +419,7 @@ class MinimumOrderSizeFilter:
         
         return filtered
     
-    def get_stats(self) -> Dict[str, any]:
+    def get_stats(self) -> Dict[str, Any]:
         """Get filtering statistics."""
         filter_rate = (self.filtered_count / self.total_count * 100) if self.total_count > 0 else 0
         
@@ -488,7 +493,7 @@ class LatencyMonitor:
 
 # All 5 accuracy improvements are now embedded and always available
 ACCURACY_IMPROVEMENTS_AVAILABLE = True
-print("✓ Binance stream accuracy improvements enabled (embedded)")
+logger.info("✓ Binance stream accuracy improvements enabled (embedded)")
 
 # === END EMBEDDED ACCURACY IMPROVEMENTS ===
 # ============================================================================
@@ -943,16 +948,16 @@ def calculate_vwap_vectorized(
 # All Numba optimizations are now embedded and available if Numba is installed
 NUMBA_OPTIMIZATIONS_AVAILABLE = NUMBA_AVAILABLE
 if NUMBA_OPTIMIZATIONS_AVAILABLE:
-    print("✓ Numba JIT optimizations enabled (embedded, 61× faster calculations)")
-    print("  - Order book L1000 scanning: 75× faster")
-    print("  - Multi-level imbalance: 62× faster")
-    print("  - Liquidity cliff detection: 53× faster")
-    print("  - Percentile calculations: 50× faster")
-    print("  - Vacuum scoring: 50× faster")
-    print("  - VWAP calculation: 60× faster")
+    logger.info("✓ Numba JIT optimizations enabled (embedded, 61× faster calculations)")
+    logger.info("  - Order book L1000 scanning: 75× faster")
+    logger.info("  - Multi-level imbalance: 62× faster")
+    logger.info("  - Liquidity cliff detection: 53× faster")
+    logger.info("  - Percentile calculations: 50× faster")
+    logger.info("  - Vacuum scoring: 50× faster")
+    logger.info("  - VWAP calculation: 60× faster")
 else:
-    print("ℹ️  Numba not installed - using standard Python implementations")
-    print("   To enable 61× speedup: pip install numba")
+    logger.info("ℹ️  Numba not installed - using standard Python implementations")
+    logger.info("   To enable 61× speedup: pip install numba")
 
 # === END EMBEDDED NUMBA JIT OPTIMIZATIONS ===
 # ============================================================================
@@ -1271,7 +1276,8 @@ class SpreadDecompositionAnalyzer:
                 'fixed_spread_component_bps': float(abs(processing_cost) * 2 * 10000) if prices[-1] > 0 else 0,
                 'information_component_bps': float(abs(adverse_selection) * np.mean(volumes) * 10000) if prices[-1] > 0 else 0,
             }
-        except:
+        except (ValueError, IndexError, ZeroDivisionError) as e:
+            logger.debug(f"Glosten-Harris decomposition failed: {e}")
             return {
                 'adverse_selection_lambda': 0.0,
                 'processing_cost': 0.0,
@@ -1860,17 +1866,17 @@ class InstitutionalOrderBookAnalytics:
         return analytics
 
 
-# Print status message
+# Log status message
 if NUMBA_AVAILABLE:
-    print("✓ Institutional-grade order book analytics enabled (embedded, 95/100 research-grade)")
-    print("  - Book ticker stream processing: 1000+ ticks/second")
-    print("  - Spread decomposition: Roll, Glosten-Harris models")
-    print("  - Microstructure noise filtering: Hansen-Lunde, Zhang estimators")
-    print("  - Order flow toxicity: VPIN, OFI with flash crash detection")
-    print("  - Queue position analytics: Execution probability modeling")
+    logger.info("✓ Institutional-grade order book analytics enabled (embedded, 95/100 research-grade)")
+    logger.info("  - Book ticker stream processing: 1000+ ticks/second")
+    logger.info("  - Spread decomposition: Roll, Glosten-Harris models")
+    logger.info("  - Microstructure noise filtering: Hansen-Lunde, Zhang estimators")
+    logger.info("  - Order flow toxicity: VPIN, OFI with flash crash detection")
+    logger.info("  - Queue position analytics: Execution probability modeling")
 else:
-    print("✓ Institutional-grade order book analytics enabled (embedded)")
-    print("  Note: Install numba for optimal performance")
+    logger.info("✓ Institutional-grade order book analytics enabled (embedded)")
+    logger.info("  Note: Install numba for optimal performance")
 
 # === END EMBEDDED INSTITUTIONAL-GRADE ORDER BOOK ANALYTICS ===
 # ============================================================================
@@ -2246,9 +2252,10 @@ class ArbitrageOpportunityDetector:
         }
 
 
-class FundingRateAnalyzer:
+class SpotFuturesFundingAnalyzer:
     """
     Analyzes funding rate dynamics and their correlation with market activity.
+    Used specifically for spot-futures correlation analysis.
     
     High positive funding: Longs paying shorts (bullish sentiment, may be overheated)
     High negative funding: Shorts paying longs (bearish sentiment, may be oversold)
@@ -2375,7 +2382,7 @@ class SpotFuturesCorrelationAnalyzer:
             transaction_cost_bps=transaction_cost_bps,
             min_profit_threshold_bps=min_arb_profit_bps
         )
-        self.funding_analyzer = FundingRateAnalyzer(window_size=funding_window)
+        self.funding_analyzer = SpotFuturesFundingAnalyzer(window_size=funding_window)
         
         self.snapshot_history = deque(maxlen=1000)
         
@@ -2528,15 +2535,15 @@ class SpotFuturesCorrelationAnalyzer:
 # Test spot-futures analyzer availability at module load
 try:
     _test_spot_futures = SpotFuturesCorrelationAnalyzer()
-    print("✓ Spot-futures correlation analyzer enabled (embedded)")
-    print("  - Basis analysis (contango/backwardation)")
-    print("  - Volume lead-lag detection")
-    print("  - OFI correlation monitoring")
-    print("  - Arbitrage opportunity detection")
-    print("  - Funding rate regime analysis")
+    logger.info("✓ Spot-futures correlation analyzer enabled (embedded)")
+    logger.info("  - Basis analysis (contango/backwardation)")
+    logger.info("  - Volume lead-lag detection")
+    logger.info("  - OFI correlation monitoring")
+    logger.info("  - Arbitrage opportunity detection")
+    logger.info("  - Funding rate regime analysis")
 except Exception as e:
-    print(f"⚠ Spot-futures analyzer initialization warning: {e}")
-    print("  System will use basic correlation analysis")
+    logger.warning(f"⚠ Spot-futures analyzer initialization warning: {e}")
+    logger.warning("  System will use basic correlation analysis")
 
 # === END EMBEDDED SPOT-FUTURES CORRELATION ANALYZER ===
 # ============================================================================
@@ -5695,7 +5702,8 @@ class AdvancedOrderFlow:
                 else:
                     self.depth_skewness_bid = 0.0
                     self.skewness_interpretation_bid = "neutral"
-            except:
+            except (ValueError, ZeroDivisionError, OverflowError) as e:
+                logger.debug(f"Skewness calculation failed for bid volumes: {e}")
                 self.depth_skewness_bid = 0.0
                 self.skewness_interpretation_bid = "neutral"
         else:
@@ -5720,7 +5728,8 @@ class AdvancedOrderFlow:
                 else:
                     self.depth_skewness_ask = 0.0
                     self.skewness_interpretation_ask = "neutral"
-            except:
+            except (ValueError, ZeroDivisionError, OverflowError) as e:
+                logger.debug(f"Skewness calculation failed for ask volumes: {e}")
                 self.depth_skewness_ask = 0.0
                 self.skewness_interpretation_ask = "neutral"
         else:
@@ -7011,8 +7020,8 @@ class AdvancedOrderFlow:
                         print(f"      → 📉 OI dropping + Long liquidations: Bearish cascade risk")
                     else:
                         print(f"      → 📊 Normal OI-Liquidation dynamics")
-            except:
-                pass
+            except (IndexError, ValueError, KeyError) as e:
+                logger.debug(f"OI-Liquidation analysis failed: {e}")
         
         # ===== SECTION 5: Trading Implications =====
         print(f"\n   💡 TRADING IMPLICATIONS:")
@@ -9488,11 +9497,11 @@ class MarketClient:
                 side = "Buy" if d["o"] == "SELL" else "Sell"
                 try:
                     size = float(d["l"])
-                except:
+                except (ValueError, TypeError):
                     size = 0.0
                 try:
                     price = float(d.get("p", 0))  # Liquidation price
-                except:
+                except (ValueError, TypeError):
                     price = 0.0
                     
                 self.liq_count[side] += 1
@@ -10837,7 +10846,8 @@ class MarketClient:
         try:
             feat["OFI_L1"] = self.calc_order_flow_imbalance(self.prev_l1, self.curr_l1)
             feat["OFI_L5"] = self.calc_order_flow_imbalance(self.prev_l5, self.curr_l5)
-        except:
+        except (ValueError, KeyError, AttributeError) as e:
+            logger.debug(f"OFI calculation failed: {e}")
             feat["OFI_L1"] = None
             feat["OFI_L5"] = None
 
@@ -11290,8 +11300,8 @@ class MarketClient:
                         import statistics
                         corr = statistics.correlation(oi_values, funding_values)
                         self.advanced_orderflow.oi_funding_correlation = corr
-                except:
-                    pass
+                except (ValueError, KeyError, IndexError) as e:
+                    logger.debug(f"OI-Funding correlation calculation failed: {e}")
             
             # Calculate correlation with mark price
             if len(self.mid_price_history) >= 20:
@@ -11310,8 +11320,8 @@ class MarketClient:
                         import statistics
                         corr = statistics.correlation(oi_values, mark_prices)
                         self.advanced_orderflow.oi_price_correlation = corr
-                except:
-                    pass
+                except (ValueError, KeyError, IndexError) as e:
+                    logger.debug(f"OI-Price correlation calculation failed: {e}")
 
     async def proc_ticker(self, name, data, ts):
         if isinstance(data, list) and data:
