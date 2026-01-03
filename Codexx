@@ -1952,6 +1952,288 @@ else:
 
 
 # ============================================================================
+# === PHASE 1: ENHANCED LIQUIDITY HEATMAP ANALYZER ===
+# ============================================================================
+# Advanced liquidity tracking for astute trading decisions:
+# - Liquidity Walls: Track large bid/ask clusters (support/resistance)
+# - Absorption Rate: Measure how fast orders get filled at each level
+# - Vacuum Zones: Identify price gaps with minimal liquidity (gap move risk)
+# - Real-time Heatmap: Visualize liquidity concentration over time
+# ============================================================================
+
+class EnhancedLiquidityHeatmapAnalyzer:
+    """
+    Phase 1: Enhanced Liquidity Heatmap Analysis
+    
+    Provides astute liquidity tracking to identify:
+    1. Liquidity walls (support/resistance levels)
+    2. Order absorption rates (wall strength)
+    3. Vacuum zones (low-liquidity gaps)
+    4. Liquidity concentration patterns
+    
+    Used for: Identifying potential breakout/breakdown levels, 
+    measuring institutional activity, predicting fast moves.
+    """
+    
+    def __init__(self, price_bin_size: float = 10.0, history_seconds: float = 300.0):
+        """
+        Initialize the Enhanced Liquidity Heatmap Analyzer.
+        
+        Args:
+            price_bin_size: Size of price bins for heatmap aggregation (default: $10)
+            history_seconds: How long to track history (default: 300s = 5 minutes)
+        """
+        self.price_bin_size = price_bin_size
+        self.history_seconds = history_seconds
+        
+        # Liquidity Wall Tracking
+        self.liquidity_walls: Dict[str, List[Tuple[float, float, float, float]]] = {
+            'BID': [],  # (timestamp, price, volume, wall_strength)
+            'ASK': []
+        }
+        
+        # Absorption Rate Tracking
+        self.absorption_history: List[Tuple[float, float, str, float, float]] = []  # (ts, price, side, volume_absorbed, absorption_rate)
+        
+        # Vacuum Zone Detection
+        self.vacuum_zones: List[Tuple[float, float, float, float]] = []  # (timestamp, price_low, price_high, gap_size)
+        
+        # Heatmap History
+        self.heatmap_snapshots: List[Tuple[float, Dict[float, float], Dict[float, float]]] = []  # (ts, bid_bins, ask_bins)
+        
+        # Liquidity Concentration Metrics
+        self.concentration_score: float = 0.0
+        self.top_support_level: Optional[float] = None
+        self.top_resistance_level: Optional[float] = None
+        
+    def update(self, timestamp: float, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]):
+        """
+        Update all liquidity metrics with new orderbook snapshot.
+        
+        Args:
+            timestamp: Unix timestamp of the snapshot
+            bids: List of (price, volume) bid tuples
+            asks: List of (price, volume) ask tuples
+        """
+        if not bids or not asks:
+            return
+        
+        # Update all components
+        self._update_liquidity_walls(timestamp, bids, asks)
+        self._calculate_absorption_rates(timestamp, bids, asks)
+        self._detect_vacuum_zones(timestamp, bids, asks)
+        self._update_heatmap(timestamp, bids, asks)
+        self._calculate_concentration_metrics(bids, asks)
+        
+        # Cleanup old data
+        self._cleanup_old_data(timestamp)
+    
+    def _update_liquidity_walls(self, timestamp: float, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]):
+        """Track large bid/ask clusters that act as support/resistance."""
+        if not bids or not asks:
+            return
+        
+        # Calculate volume thresholds (top 10% of volumes)
+        all_volumes = [vol for _, vol in bids[:20]] + [vol for _, vol in asks[:20]]
+        if not all_volumes:
+            return
+        
+        avg_volume = safe_mean(all_volumes, 0.0)
+        wall_threshold = avg_volume * 2.0  # 2x average = significant wall
+        
+        # Detect bid walls
+        for price, volume in bids[:20]:  # Check top 20 levels
+            if volume >= wall_threshold:
+                # Calculate wall strength (volume relative to average)
+                wall_strength = safe_divide(volume, avg_volume, 1.0)
+                self.liquidity_walls['BID'].append((timestamp, price, volume, wall_strength))
+        
+        # Detect ask walls
+        for price, volume in asks[:20]:
+            if volume >= wall_threshold:
+                wall_strength = safe_divide(volume, avg_volume, 1.0)
+                self.liquidity_walls['ASK'].append((timestamp, price, volume, wall_strength))
+    
+    def _calculate_absorption_rates(self, timestamp: float, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]):
+        """Calculate how fast large orders are being absorbed at each price level."""
+        # Compare current snapshot with previous to detect volume changes
+        if len(self.heatmap_snapshots) < 2:
+            return
+        
+        prev_ts, prev_bids, prev_asks = self.heatmap_snapshots[-1]
+        time_delta = timestamp - prev_ts
+        
+        if time_delta <= 0:
+            return
+        
+        # Check bid absorption
+        for price in prev_bids:
+            prev_vol = prev_bids[price]
+            curr_vol = sum(v for p, v in bids if abs(p - price) < self.price_bin_size / 2)
+            
+            if prev_vol > 0 and curr_vol < prev_vol:
+                volume_absorbed = prev_vol - curr_vol
+                absorption_rate = safe_divide(volume_absorbed, time_delta, 0.0)  # volume/second
+                
+                if absorption_rate > 0:  # Only track actual absorption
+                    self.absorption_history.append((timestamp, price, 'BID', volume_absorbed, absorption_rate))
+        
+        # Check ask absorption
+        for price in prev_asks:
+            prev_vol = prev_asks[price]
+            curr_vol = sum(v for p, v in asks if abs(p - price) < self.price_bin_size / 2)
+            
+            if prev_vol > 0 and curr_vol < prev_vol:
+                volume_absorbed = prev_vol - curr_vol
+                absorption_rate = safe_divide(volume_absorbed, time_delta, 0.0)
+                
+                if absorption_rate > 0:
+                    self.absorption_history.append((timestamp, price, 'ASK', volume_absorbed, absorption_rate))
+    
+    def _detect_vacuum_zones(self, timestamp: float, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]):
+        """Identify price levels with minimal liquidity (potential for fast moves)."""
+        if not bids or not asks:
+            return
+        
+        # Calculate average liquidity per price level
+        bid_prices = [p for p, _ in bids]
+        ask_prices = [p for p, _ in asks]
+        
+        # Find gaps in the orderbook (price jumps > 2x bin size)
+        min_gap_size = self.price_bin_size * 2.0
+        
+        # Check for gaps in bids (descending order)
+        for i in range(len(bid_prices) - 1):
+            gap = bid_prices[i] - bid_prices[i + 1]
+            if gap > min_gap_size:
+                self.vacuum_zones.append((timestamp, bid_prices[i + 1], bid_prices[i], gap))
+        
+        # Check for gaps in asks (ascending order)
+        for i in range(len(ask_prices) - 1):
+            gap = ask_prices[i + 1] - ask_prices[i]
+            if gap > min_gap_size:
+                self.vacuum_zones.append((timestamp, ask_prices[i], ask_prices[i + 1], gap))
+    
+    def _update_heatmap(self, timestamp: float, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]):
+        """Create depth heatmap snapshot for tracking liquidity concentration over time."""
+        # Aggregate volume into price bins
+        bid_bins: Dict[float, float] = {}
+        ask_bins: Dict[float, float] = {}
+        
+        for price, vol in bids:
+            bin_price = round(price / self.price_bin_size) * self.price_bin_size
+            bid_bins[bin_price] = bid_bins.get(bin_price, 0.0) + vol
+        
+        for price, vol in asks:
+            bin_price = round(price / self.price_bin_size) * self.price_bin_size
+            ask_bins[bin_price] = ask_bins.get(bin_price, 0.0) + vol
+        
+        self.heatmap_snapshots.append((timestamp, bid_bins, ask_bins))
+    
+    def _calculate_concentration_metrics(self, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]):
+        """Calculate how concentrated liquidity is (Gini-like coefficient)."""
+        if not bids or not asks:
+            return
+        
+        # Get all volumes
+        bid_volumes = [v for _, v in bids[:20]]
+        ask_volumes = [v for _, v in asks[:20]]
+        
+        if not bid_volumes or not ask_volumes:
+            return
+        
+        # Calculate concentration: top 3 levels vs total
+        total_bid_vol = sum(bid_volumes)
+        total_ask_vol = sum(ask_volumes)
+        
+        top3_bid_vol = sum(sorted(bid_volumes, reverse=True)[:3])
+        top3_ask_vol = sum(sorted(ask_volumes, reverse=True)[:3])
+        
+        bid_concentration = safe_divide(top3_bid_vol, total_bid_vol, 0.0)
+        ask_concentration = safe_divide(top3_ask_vol, total_ask_vol, 0.0)
+        
+        # Average concentration score (0-1, higher = more concentrated)
+        self.concentration_score = (bid_concentration + ask_concentration) / 2.0
+        
+        # Identify top support/resistance levels (highest volume)
+        if bids:
+            self.top_support_level = max(bids[:20], key=lambda x: x[1])[0]
+        if asks:
+            self.top_resistance_level = max(asks[:20], key=lambda x: x[1])[0]
+    
+    def _cleanup_old_data(self, current_timestamp: float):
+        """Remove data older than history_seconds."""
+        cutoff_time = current_timestamp - self.history_seconds
+        
+        # Cleanup liquidity walls
+        self.liquidity_walls['BID'] = [(ts, p, v, s) for ts, p, v, s in self.liquidity_walls['BID'] if ts >= cutoff_time]
+        self.liquidity_walls['ASK'] = [(ts, p, v, s) for ts, p, v, s in self.liquidity_walls['ASK'] if ts >= cutoff_time]
+        
+        # Cleanup absorption history
+        self.absorption_history = [(ts, p, side, v, r) for ts, p, side, v, r in self.absorption_history if ts >= cutoff_time]
+        
+        # Cleanup vacuum zones
+        self.vacuum_zones = [(ts, pl, ph, g) for ts, pl, ph, g in self.vacuum_zones if ts >= cutoff_time]
+        
+        # Cleanup heatmap snapshots
+        self.heatmap_snapshots = [(ts, b, a) for ts, b, a in self.heatmap_snapshots if ts >= cutoff_time]
+    
+    def get_liquidity_summary(self) -> Dict[str, Any]:
+        """
+        Get comprehensive liquidity analysis summary.
+        
+        Returns:
+            Dictionary with all liquidity metrics and insights
+        """
+        # Count active walls
+        bid_walls_count = len([w for w in self.liquidity_walls['BID']])
+        ask_walls_count = len([w for w in self.liquidity_walls['ASK']])
+        
+        # Calculate average absorption rate
+        recent_absorption = self.absorption_history[-20:] if len(self.absorption_history) >= 20 else self.absorption_history
+        avg_absorption_rate = safe_mean([r for _, _, _, _, r in recent_absorption], 0.0)
+        
+        # Count vacuum zones
+        recent_vacuums = [vz for vz in self.vacuum_zones if len(self.vacuum_zones) > 0]
+        
+        return {
+            'liquidity_walls': {
+                'bid_walls': bid_walls_count,
+                'ask_walls': ask_walls_count,
+                'top_support': self.top_support_level,
+                'top_resistance': self.top_resistance_level
+            },
+            'absorption': {
+                'avg_rate': avg_absorption_rate,
+                'recent_events': len(recent_absorption)
+            },
+            'vacuum_zones': {
+                'count': len(recent_vacuums),
+                'largest_gap': max([g for _, _, _, g in recent_vacuums], default=0.0)
+            },
+            'concentration': {
+                'score': self.concentration_score,
+                'interpretation': self._interpret_concentration()
+            }
+        }
+    
+    def _interpret_concentration(self) -> str:
+        """Interpret concentration score for trading insights."""
+        if self.concentration_score > 0.7:
+            return "HIGHLY CONCENTRATED - Few large orders dominating (institutional)"
+        elif self.concentration_score > 0.5:
+            return "CONCENTRATED - Significant liquidity walls present"
+        elif self.concentration_score > 0.3:
+            return "BALANCED - Liquidity well distributed"
+        else:
+            return "FRAGMENTED - Many small orders (retail dominated)"
+
+
+# === END PHASE 1: ENHANCED LIQUIDITY HEATMAP ANALYZER ===
+# ============================================================================
+
+
+# ============================================================================
 # === EMBEDDED SPOT-FUTURES CORRELATION ANALYZER ===
 # ============================================================================
 
