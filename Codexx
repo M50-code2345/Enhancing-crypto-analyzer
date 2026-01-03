@@ -9441,6 +9441,7 @@ class MarketClient:
                 self.market_movement_analyzer = None
                 self.stream_quality_monitor = None
                 self.ofi_calculator = None
+                self.last_market_movement_display = None
                 print(f"[{self.name}] ⚠️  Integrated Market Movement Analyzer not available ({e})")
                 print(f"[{self.name}] ℹ️  In Jupyter: Use 'Kernel → Restart & Run All' to enable this feature")
         else:
@@ -9449,6 +9450,7 @@ class MarketClient:
             self.market_movement_analyzer = None
             self.stream_quality_monitor = None
             self.ofi_calculator = None
+            self.last_market_movement_display = None
 
         # ─── Price‐Action Buffers ────────────────────────────
         self.prev_bar       = None  # store previous bar dict
