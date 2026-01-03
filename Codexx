@@ -13044,6 +13044,441 @@ class SymbolSupervisorActor:
 
 
 # ============================================================
+# INTEGRATED MARKET MOVEMENT ANALYZER
+# ============================================================
+
+class IntegratedMarketMovementAnalyzer:
+    """
+    Integrated analyzer that combines OrderBook, BookTicker, AggTrades, and Trade data
+    to identify who is really moving the market (buyers vs sellers).
+    
+    This class provides a comprehensive view of market dynamics by correlating:
+    - OrderBook: Liquidity structure and depth changes
+    - BookTicker: Real-time best bid/ask updates
+    - AggTrades: Aggregated trade flow and direction
+    - Trade: Individual trade-by-trade analysis
+    
+    Key Features:
+    - Real-time buyer/seller pressure calculation
+    - Aggressive vs passive order identification
+    - Market impact measurement
+    - Smart money vs retail detection
+    - Coordinated buying/selling pattern detection
+    """
+    
+    def __init__(self, window_seconds: int = 30):
+        """
+        Initialize the integrated market movement analyzer.
+        
+        Args:
+            window_seconds: Time window for analysis (default: 30 seconds)
+        """
+        self.window_seconds = window_seconds
+        
+        # Data storage for coordination
+        self.orderbook_snapshots = deque(maxlen=1000)  # (timestamp, bids, asks)
+        self.bookticker_updates = deque(maxlen=10000)  # (timestamp, best_bid, best_ask, bid_qty, ask_qty)
+        self.aggtrades = deque(maxlen=10000)           # (timestamp, price, qty, is_buyer_maker)
+        self.trades = deque(maxlen=10000)              # (timestamp, price, qty, side, is_aggressive)
+        
+        # Analyzed metrics
+        self.buyer_pressure_score = 0.0      # -100 to +100
+        self.seller_pressure_score = 0.0     # -100 to +100
+        self.net_market_pressure = 0.0       # Buyer - Seller pressure
+        
+        # Smart money indicators
+        self.institutional_buy_volume = 0.0
+        self.institutional_sell_volume = 0.0
+        self.retail_buy_volume = 0.0
+        self.retail_sell_volume = 0.0
+        
+        # Coordinated activity detection
+        self.coordinated_buying_events = deque(maxlen=100)
+        self.coordinated_selling_events = deque(maxlen=100)
+        
+        # Market impact tracking
+        self.buy_market_impact = deque(maxlen=500)   # Price impact per unit volume
+        self.sell_market_impact = deque(maxlen=500)
+        
+        # Aggressor classification
+        self.aggressive_buyer_volume = 0.0
+        self.aggressive_seller_volume = 0.0
+        self.passive_buyer_volume = 0.0
+        self.passive_seller_volume = 0.0
+        
+        # Last updated timestamp
+        self.last_update_time = 0.0
+        
+    def add_orderbook_snapshot(self, timestamp: float, bids: List[Tuple[float, float]], 
+                               asks: List[Tuple[float, float]]):
+        """
+        Add orderbook snapshot for analysis.
+        
+        Args:
+            timestamp: Snapshot timestamp
+            bids: List of (price, quantity) tuples
+            asks: List of (price, quantity) tuples
+        """
+        self.orderbook_snapshots.append((timestamp, bids, asks))
+        self._analyze_depth_changes(timestamp, bids, asks)
+        
+    def add_bookticker_update(self, timestamp: float, best_bid: float, best_ask: float,
+                             bid_qty: float, ask_qty: float):
+        """
+        Add bookticker update for real-time bid/ask tracking.
+        
+        Args:
+            timestamp: Update timestamp
+            best_bid: Best bid price
+            best_ask: Best ask price
+            bid_qty: Quantity at best bid
+            ask_qty: Quantity at best ask
+        """
+        self.bookticker_updates.append((timestamp, best_bid, best_ask, bid_qty, ask_qty))
+        self._analyze_book_pressure(timestamp, best_bid, best_ask, bid_qty, ask_qty)
+        
+    def add_aggtrade(self, timestamp: float, price: float, quantity: float, 
+                    is_buyer_maker: bool):
+        """
+        Add aggregated trade for flow analysis.
+        
+        Args:
+            timestamp: Trade timestamp
+            price: Trade price
+            quantity: Trade quantity
+            is_buyer_maker: True if buyer was maker (sell aggression)
+        """
+        self.aggtrades.append((timestamp, price, quantity, is_buyer_maker))
+        self._analyze_trade_flow(timestamp, price, quantity, is_buyer_maker)
+        
+    def add_trade(self, timestamp: float, price: float, quantity: float,
+                 side: str, is_aggressive: bool = True):
+        """
+        Add individual trade for detailed analysis.
+        
+        Args:
+            timestamp: Trade timestamp
+            price: Trade price
+            quantity: Trade quantity
+            side: "Buy" or "Sell"
+            is_aggressive: Whether this is an aggressive (taker) order
+        """
+        self.trades.append((timestamp, price, quantity, side, is_aggressive))
+        self._classify_trade(timestamp, price, quantity, side, is_aggressive)
+        
+    def _analyze_depth_changes(self, timestamp: float, bids: List[Tuple[float, float]], 
+                               asks: List[Tuple[float, float]]):
+        """Analyze orderbook depth changes to detect accumulation/distribution."""
+        if len(self.orderbook_snapshots) < 2:
+            return
+            
+        # Compare with previous snapshot
+        prev_timestamp, prev_bids, prev_asks = self.orderbook_snapshots[-2]
+        
+        # Calculate depth changes at top levels
+        bid_depth_change = sum(q for p, q in bids[:10]) - sum(q for p, q in prev_bids[:10]) if prev_bids else 0
+        ask_depth_change = sum(q for p, q in asks[:10]) - sum(q for p, q in prev_asks[:10]) if prev_asks else 0
+        
+        # Increasing bid depth = buying interest
+        # Decreasing ask depth = buying pressure (asks being taken)
+        # Increasing ask depth = selling interest
+        # Decreasing bid depth = selling pressure (bids being taken)
+        
+        if bid_depth_change > 0 and ask_depth_change < 0:
+            # Strong buying signal: bids added, asks removed
+            self.buyer_pressure_score += min(10, abs(bid_depth_change) * 0.1)
+        elif ask_depth_change > 0 and bid_depth_change < 0:
+            # Strong selling signal: asks added, bids removed
+            self.seller_pressure_score += min(10, abs(ask_depth_change) * 0.1)
+            
+    def _analyze_book_pressure(self, timestamp: float, best_bid: float, best_ask: float,
+                              bid_qty: float, ask_qty: float):
+        """Analyze bid/ask quantity imbalance at best levels."""
+        if len(self.bookticker_updates) < 2:
+            return
+            
+        # Calculate imbalance
+        total_qty = bid_qty + ask_qty
+        if total_qty > 0:
+            imbalance = (bid_qty - ask_qty) / total_qty
+            
+            # Positive imbalance = more bids (buying pressure)
+            # Negative imbalance = more asks (selling pressure)
+            if imbalance > 0.2:
+                self.buyer_pressure_score += imbalance * 5
+            elif imbalance < -0.2:
+                self.seller_pressure_score += abs(imbalance) * 5
+                
+    def _analyze_trade_flow(self, timestamp: float, price: float, quantity: float,
+                           is_buyer_maker: bool):
+        """Analyze aggregated trade flow to identify aggressors."""
+        notional = price * quantity
+        
+        if is_buyer_maker:
+            # Buyer was maker (passive), seller was taker (aggressive)
+            self.aggressive_seller_volume += quantity
+            self.passive_buyer_volume += quantity
+            self.seller_pressure_score += min(5, notional / 10000)  # Scale by $10k
+        else:
+            # Seller was maker (passive), buyer was taker (aggressive)
+            self.aggressive_buyer_volume += quantity
+            self.passive_seller_volume += quantity
+            self.buyer_pressure_score += min(5, notional / 10000)
+            
+        # Detect large institutional trades (>$100k)
+        if notional > 100000:
+            if is_buyer_maker:
+                self.institutional_sell_volume += quantity
+            else:
+                self.institutional_buy_volume += quantity
+        else:
+            # Likely retail
+            if is_buyer_maker:
+                self.retail_sell_volume += quantity
+            else:
+                self.retail_buy_volume += quantity
+                
+    def _classify_trade(self, timestamp: float, price: float, quantity: float,
+                       side: str, is_aggressive: bool):
+        """Classify individual trades for detailed market movement analysis."""
+        notional = price * quantity
+        
+        # Track aggressive vs passive
+        if is_aggressive:
+            if side == "Buy":
+                self.aggressive_buyer_volume += quantity
+            else:
+                self.aggressive_seller_volume += quantity
+        else:
+            if side == "Buy":
+                self.passive_buyer_volume += quantity
+            else:
+                self.passive_seller_volume += quantity
+                
+        # Measure market impact
+        if len(self.trades) >= 2:
+            prev_ts, prev_price, prev_qty, prev_side, prev_agg = self.trades[-2]
+            price_change = (price - prev_price) / prev_price if prev_price > 0 else 0
+            
+            if is_aggressive:
+                if side == "Buy":
+                    # Buy impact: positive price movement per unit volume
+                    impact = price_change / quantity if quantity > 0 else 0
+                    self.buy_market_impact.append(impact)
+                else:
+                    # Sell impact: negative price movement per unit volume
+                    impact = abs(price_change) / quantity if quantity > 0 else 0
+                    self.sell_market_impact.append(impact)
+                    
+    def _detect_coordinated_activity(self, timestamp: float):
+        """Detect coordinated buying or selling patterns across data sources."""
+        cutoff_time = timestamp - self.window_seconds
+        
+        # Get recent activity
+        recent_trades = [t for t in self.trades if t[0] >= cutoff_time]
+        recent_aggtrades = [t for t in self.aggtrades if t[0] >= cutoff_time]
+        
+        if not recent_trades or not recent_aggtrades:
+            return
+            
+        # Check for coordinated buying
+        buy_trades = [t for t in recent_trades if t[3] == "Buy"]
+        agg_buy_trades = [t for t in recent_aggtrades if not t[3]]  # not is_buyer_maker = aggressive buy
+        
+        if len(buy_trades) > 10 and len(agg_buy_trades) > 10:
+            # Calculate clustering
+            buy_volume = sum(t[2] for t in buy_trades)
+            agg_buy_volume = sum(t[2] for t in agg_buy_trades)
+            
+            if buy_volume > 0 and agg_buy_volume > 0:
+                # High correlation suggests coordinated buying
+                self.coordinated_buying_events.append((timestamp, buy_volume + agg_buy_volume))
+                
+        # Check for coordinated selling
+        sell_trades = [t for t in recent_trades if t[3] == "Sell"]
+        agg_sell_trades = [t for t in recent_aggtrades if t[3]]  # is_buyer_maker = aggressive sell
+        
+        if len(sell_trades) > 10 and len(agg_sell_trades) > 10:
+            sell_volume = sum(t[2] for t in sell_trades)
+            agg_sell_volume = sum(t[2] for t in agg_sell_trades)
+            
+            if sell_volume > 0 and agg_sell_volume > 0:
+                self.coordinated_selling_events.append((timestamp, sell_volume + agg_sell_volume))
+                
+    def calculate_market_movement_metrics(self, timestamp: float) -> Dict[str, Any]:
+        """
+        Calculate comprehensive market movement metrics.
+        
+        Args:
+            timestamp: Current timestamp
+            
+        Returns:
+            Dictionary with detailed market movement analysis
+        """
+        cutoff_time = timestamp - self.window_seconds
+        self.last_update_time = timestamp
+        
+        # Detect coordinated activity
+        self._detect_coordinated_activity(timestamp)
+        
+        # Decay pressure scores over time (exponential decay)
+        decay_factor = 0.95
+        self.buyer_pressure_score *= decay_factor
+        self.seller_pressure_score *= decay_factor
+        
+        # Calculate net pressure
+        self.net_market_pressure = self.buyer_pressure_score - self.seller_pressure_score
+        
+        # Get recent data volumes
+        recent_trades = [t for t in self.trades if t[0] >= cutoff_time]
+        recent_aggtrades = [t for t in self.aggtrades if t[0] >= cutoff_time]
+        
+        total_buy_volume = sum(t[2] for t in recent_trades if t[3] == "Buy")
+        total_sell_volume = sum(t[2] for t in recent_trades if t[3] == "Sell")
+        
+        # Calculate market dominance
+        total_volume = total_buy_volume + total_sell_volume
+        buyer_dominance = (total_buy_volume / total_volume * 100) if total_volume > 0 else 50.0
+        seller_dominance = (total_sell_volume / total_volume * 100) if total_volume > 0 else 50.0
+        
+        # Calculate institutional vs retail ratio
+        total_inst_volume = self.institutional_buy_volume + self.institutional_sell_volume
+        total_retail_volume = self.retail_buy_volume + self.retail_sell_volume
+        inst_retail_ratio = total_inst_volume / total_retail_volume if total_retail_volume > 0 else 0
+        
+        # Calculate aggression ratios
+        total_aggressive = self.aggressive_buyer_volume + self.aggressive_seller_volume
+        aggressive_buy_ratio = (self.aggressive_buyer_volume / total_aggressive * 100) if total_aggressive > 0 else 50.0
+        
+        # Calculate average market impact
+        avg_buy_impact = safe_mean(list(self.buy_market_impact)[-100:], 0.0) if self.buy_market_impact else 0.0
+        avg_sell_impact = safe_mean(list(self.sell_market_impact)[-100:], 0.0) if self.sell_market_impact else 0.0
+        
+        # Determine who is moving the market
+        if self.net_market_pressure > 20:
+            market_mover = "BUYERS"
+            market_mover_strength = "STRONG"
+        elif self.net_market_pressure > 10:
+            market_mover = "BUYERS"
+            market_mover_strength = "MODERATE"
+        elif self.net_market_pressure < -20:
+            market_mover = "SELLERS"
+            market_mover_strength = "STRONG"
+        elif self.net_market_pressure < -10:
+            market_mover = "SELLERS"
+            market_mover_strength = "MODERATE"
+        else:
+            market_mover = "BALANCED"
+            market_mover_strength = "NEUTRAL"
+            
+        return {
+            # Primary metrics
+            'market_mover': market_mover,
+            'market_mover_strength': market_mover_strength,
+            'net_market_pressure': self.net_market_pressure,
+            'buyer_pressure_score': self.buyer_pressure_score,
+            'seller_pressure_score': self.seller_pressure_score,
+            
+            # Volume analysis
+            'buyer_dominance_pct': buyer_dominance,
+            'seller_dominance_pct': seller_dominance,
+            'total_buy_volume': total_buy_volume,
+            'total_sell_volume': total_sell_volume,
+            
+            # Aggressor analysis
+            'aggressive_buyer_volume': self.aggressive_buyer_volume,
+            'aggressive_seller_volume': self.aggressive_seller_volume,
+            'aggressive_buy_ratio_pct': aggressive_buy_ratio,
+            'passive_buyer_volume': self.passive_buyer_volume,
+            'passive_seller_volume': self.passive_seller_volume,
+            
+            # Smart money vs retail
+            'institutional_buy_volume': self.institutional_buy_volume,
+            'institutional_sell_volume': self.institutional_sell_volume,
+            'retail_buy_volume': self.retail_buy_volume,
+            'retail_sell_volume': self.retail_sell_volume,
+            'inst_retail_ratio': inst_retail_ratio,
+            
+            # Market impact
+            'avg_buy_market_impact': avg_buy_impact,
+            'avg_sell_market_impact': avg_sell_impact,
+            'buy_impact_stronger': avg_buy_impact > avg_sell_impact,
+            
+            # Coordinated activity
+            'coordinated_buying_events': len([e for e in self.coordinated_buying_events if e[0] >= cutoff_time]),
+            'coordinated_selling_events': len([e for e in self.coordinated_selling_events if e[0] >= cutoff_time]),
+            
+            # Data quality
+            'orderbook_snapshots_count': len([s for s in self.orderbook_snapshots if s[0] >= cutoff_time]),
+            'bookticker_updates_count': len([b for b in self.bookticker_updates if b[0] >= cutoff_time]),
+            'aggtrades_count': len(recent_aggtrades),
+            'trades_count': len(recent_trades),
+            
+            'last_update_time': timestamp
+        }
+        
+    def get_market_movement_summary(self, timestamp: float) -> str:
+        """
+        Get a human-readable summary of market movement.
+        
+        Args:
+            timestamp: Current timestamp
+            
+        Returns:
+            Formatted string with market movement summary
+        """
+        metrics = self.calculate_market_movement_metrics(timestamp)
+        
+        summary = []
+        summary.append("=" * 70)
+        summary.append("INTEGRATED MARKET MOVEMENT ANALYSIS")
+        summary.append("=" * 70)
+        
+        summary.append(f"\n🎯 MARKET MOVER: {metrics['market_mover']} ({metrics['market_mover_strength']})")
+        summary.append(f"   Net Pressure: {metrics['net_market_pressure']:+.2f}")
+        summary.append(f"   Buyer Pressure: {metrics['buyer_pressure_score']:.2f}")
+        summary.append(f"   Seller Pressure: {metrics['seller_pressure_score']:.2f}")
+        
+        summary.append(f"\n📊 VOLUME DOMINANCE:")
+        summary.append(f"   Buyers: {metrics['buyer_dominance_pct']:.1f}% ({metrics['total_buy_volume']:.4f} BTC)")
+        summary.append(f"   Sellers: {metrics['seller_dominance_pct']:.1f}% ({metrics['total_sell_volume']:.4f} BTC)")
+        
+        summary.append(f"\n⚡ AGGRESSOR ANALYSIS:")
+        summary.append(f"   Aggressive Buyers: {metrics['aggressive_buyer_volume']:.4f} BTC")
+        summary.append(f"   Aggressive Sellers: {metrics['aggressive_seller_volume']:.4f} BTC")
+        summary.append(f"   Aggression Ratio: {metrics['aggressive_buy_ratio_pct']:.1f}% buy / {100-metrics['aggressive_buy_ratio_pct']:.1f}% sell")
+        
+        summary.append(f"\n🐋 SMART MONEY vs RETAIL:")
+        summary.append(f"   Institutional Buys: {metrics['institutional_buy_volume']:.4f} BTC")
+        summary.append(f"   Institutional Sells: {metrics['institutional_sell_volume']:.4f} BTC")
+        summary.append(f"   Retail Buys: {metrics['retail_buy_volume']:.4f} BTC")
+        summary.append(f"   Retail Sells: {metrics['retail_sell_volume']:.4f} BTC")
+        summary.append(f"   Inst/Retail Ratio: {metrics['inst_retail_ratio']:.2f}x")
+        
+        summary.append(f"\n💥 MARKET IMPACT:")
+        summary.append(f"   Avg Buy Impact: {metrics['avg_buy_market_impact']:.6f}")
+        summary.append(f"   Avg Sell Impact: {metrics['avg_sell_market_impact']:.6f}")
+        summary.append(f"   Stronger Impact: {'BUYS' if metrics['buy_impact_stronger'] else 'SELLS'}")
+        
+        if metrics['coordinated_buying_events'] > 0 or metrics['coordinated_selling_events'] > 0:
+            summary.append(f"\n🎭 COORDINATED ACTIVITY DETECTED:")
+            if metrics['coordinated_buying_events'] > 0:
+                summary.append(f"   Coordinated Buying Events: {metrics['coordinated_buying_events']}")
+            if metrics['coordinated_selling_events'] > 0:
+                summary.append(f"   Coordinated Selling Events: {metrics['coordinated_selling_events']}")
+        
+        summary.append(f"\n📡 DATA SOURCES:")
+        summary.append(f"   OrderBook Snapshots: {metrics['orderbook_snapshots_count']}")
+        summary.append(f"   BookTicker Updates: {metrics['bookticker_updates_count']}")
+        summary.append(f"   AggTrades: {metrics['aggtrades_count']}")
+        summary.append(f"   Individual Trades: {metrics['trades_count']}")
+        
+        summary.append("=" * 70)
+        
+        return "\n".join(summary)
+
+
+# ============================================================
 # ORCHESTRATOR
 # ============================================================
 
@@ -13221,6 +13656,113 @@ async def main():
         print("\n[Main] Stopping system...")
         orchestrator.stop()
         print("[Main] Done")
+
+
+# ============================================================
+# USAGE EXAMPLE: IntegratedMarketMovementAnalyzer
+# ============================================================
+
+def example_integrated_market_movement_analyzer():
+    """
+    Example usage of IntegratedMarketMovementAnalyzer.
+    
+    This demonstrates how to use the integrated analyzer to identify
+    who is moving the market by combining OrderBook, BookTicker, 
+    AggTrades, and Trade data.
+    """
+    import time
+    
+    # Initialize the analyzer
+    analyzer = IntegratedMarketMovementAnalyzer(window_seconds=30)
+    
+    print("=" * 70)
+    print("EXAMPLE: Integrated Market Movement Analyzer")
+    print("=" * 70)
+    print("\nThis analyzer combines multiple data sources to identify market movers:")
+    print("  - OrderBook: Depth changes and liquidity structure")
+    print("  - BookTicker: Real-time best bid/ask updates")
+    print("  - AggTrades: Aggregated trade flow direction")
+    print("  - Trades: Individual trade-by-trade analysis")
+    print()
+    
+    # Simulate some market data
+    current_time = time.time()
+    
+    # Example 1: OrderBook snapshot
+    bids = [(50000.0, 1.5), (49999.0, 2.0), (49998.0, 3.0)]
+    asks = [(50001.0, 1.2), (50002.0, 1.8), (50003.0, 2.5)]
+    analyzer.add_orderbook_snapshot(current_time, bids, asks)
+    print("✓ Added OrderBook snapshot")
+    
+    # Example 2: BookTicker updates
+    analyzer.add_bookticker_update(current_time, 50000.0, 50001.0, 1.5, 1.2)
+    print("✓ Added BookTicker update")
+    
+    # Example 3: AggTrades
+    # Simulating buying pressure (is_buyer_maker=False means aggressive buy)
+    for i in range(10):
+        analyzer.add_aggtrade(current_time + i * 0.1, 50000.0 + i, 0.1, is_buyer_maker=False)
+    print("✓ Added 10 AggTrades (buying pressure)")
+    
+    # Example 4: Individual Trades
+    for i in range(15):
+        analyzer.add_trade(current_time + i * 0.1, 50000.0 + i, 0.05, "Buy", is_aggressive=True)
+    print("✓ Added 15 Buy trades")
+    
+    # Calculate and display metrics
+    print("\n" + "=" * 70)
+    print("CALCULATING MARKET MOVEMENT METRICS...")
+    print("=" * 70)
+    
+    metrics = analyzer.calculate_market_movement_metrics(current_time + 5)
+    
+    print(f"\n🎯 RESULT: Market is being moved by {metrics['market_mover']}")
+    print(f"   Strength: {metrics['market_mover_strength']}")
+    print(f"   Net Pressure: {metrics['net_market_pressure']:+.2f}")
+    print(f"   Buyer Dominance: {metrics['buyer_dominance_pct']:.1f}%")
+    print(f"   Seller Dominance: {metrics['seller_dominance_pct']:.1f}%")
+    
+    # Display full summary
+    print("\n" + analyzer.get_market_movement_summary(current_time + 5))
+    
+    print("\n" + "=" * 70)
+    print("INTEGRATION INSTRUCTIONS:")
+    print("=" * 70)
+    print("""
+To integrate this analyzer into your trading system:
+
+1. Create an instance:
+   analyzer = IntegratedMarketMovementAnalyzer(window_seconds=30)
+
+2. Feed data from your streams:
+   # OrderBook stream
+   analyzer.add_orderbook_snapshot(timestamp, bids, asks)
+   
+   # BookTicker stream  
+   analyzer.add_bookticker_update(timestamp, best_bid, best_ask, bid_qty, ask_qty)
+   
+   # AggTrades stream
+   analyzer.add_aggtrade(timestamp, price, quantity, is_buyer_maker)
+   
+   # Trades stream
+   analyzer.add_trade(timestamp, price, quantity, side, is_aggressive)
+
+3. Get real-time analysis:
+   metrics = analyzer.calculate_market_movement_metrics(current_timestamp)
+   
+4. Display summary:
+   summary = analyzer.get_market_movement_summary(current_timestamp)
+   print(summary)
+
+Key Metrics:
+- market_mover: BUYERS, SELLERS, or BALANCED
+- market_mover_strength: STRONG, MODERATE, or NEUTRAL
+- net_market_pressure: Positive = buyers, Negative = sellers
+- institutional volumes: Large orders (>$100k)
+- coordinated activity: Simultaneous buying/selling patterns
+    """)
+    
+    print("=" * 70)
 
 
 if __name__ == "__main__":
