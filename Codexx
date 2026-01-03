@@ -9549,16 +9549,30 @@ class MarketClient:
                     last_depth_ts = self.advanced_orderflow.depth_snapshots[-1][0]
                     self.advanced_orderflow.correlate_depth_trade(last_depth_ts, ts_t)
 
-        # 3) Trade ticks
+        # 3) Trade ticks - ENHANCED: Now feeds to AdvancedOrderFlow
         elif s.endswith("@trade"):
             price = float(d["p"])
             qty   = float(d["q"])
+            trade_id = int(d.get("t", 0))  # Trade ID for duplicate detection
+            is_buyer_maker = d.get("m", False)  # True if buyer was maker
+            side = "Sell" if is_buyer_maker else "Buy"
+            exchange_ts = d.get("T", None)  # Exchange timestamp in ms
+            
             self.tick_prices.append(price)
             if len(self.tick_prices) > 1:
                 prev_price = self.tick_prices[-2]
                 sign       = 1 if price > prev_price else (-1 if price < prev_price else 0)
                 self.tick_signs.append(sign)
-            self.trade_count["Sell" if d["m"] else "Buy"] += 1
+            self.trade_count[side] += 1
+            
+            # Feed to Advanced Order Flow for comprehensive analysis
+            if self.advanced_orderflow:
+                self.advanced_orderflow.process_trade(
+                    ts_now, price, qty, side,
+                    is_aggressive=True,  # Individual trades are aggressive
+                    trade_id=trade_id,
+                    exchange_timestamp=exchange_ts
+                )
 
         # 4) Liquidations (forceOrder)
         elif s.endswith("@forceOrder"):
@@ -13041,6 +13055,324 @@ class SymbolSupervisorActor:
                 await self.ingestor.stop.remote()
             except Exception as e:
                 print(f"[SymbolSupervisor] Stop error: {e}")
+
+
+# ============================================================
+# TRADE STREAM QUALITY MONITOR
+# ============================================================
+
+class TradeStreamQualityMonitor:
+    """
+    Monitor trade stream data quality and detect issues.
+    
+    Tracks:
+    - Missing trades (gaps in trade_id sequence)
+    - Out-of-order trades
+    - Duplicate trades
+    - Latency spikes
+    - Data staleness
+    - Stream health metrics
+    """
+    
+    def __init__(self, alert_threshold_ms: float = 1000.0):
+        """
+        Initialize trade stream quality monitor.
+        
+        Args:
+            alert_threshold_ms: Latency threshold for alerts (default: 1000ms)
+        """
+        self.alert_threshold_ms = alert_threshold_ms
+        
+        # Trade ID tracking
+        self.last_trade_id = None
+        self.missing_trade_ids = []
+        self.out_of_order_count = 0
+        self.duplicate_count = 0
+        
+        # Latency tracking
+        self.latencies = deque(maxlen=1000)
+        self.latency_spikes = deque(maxlen=100)
+        
+        # Timestamp tracking
+        self.last_exchange_timestamp = 0.0
+        self.last_client_timestamp = 0.0
+        self.stale_data_events = deque(maxlen=100)
+        
+        # Stream health
+        self.total_trades_processed = 0
+        self.quality_score = 100.0  # 0-100
+        self.issues_detected = defaultdict(int)
+        
+    def check_trade(self, trade_id: Optional[int], exchange_timestamp: float, 
+                   client_timestamp: float) -> Dict[str, Any]:
+        """
+        Check a single trade for quality issues.
+        
+        Args:
+            trade_id: Unique trade ID from exchange
+            exchange_timestamp: Exchange timestamp in ms
+            client_timestamp: Client receive timestamp in ms
+            
+        Returns:
+            Dictionary with quality check results
+        """
+        issues = []
+        
+        # Check trade ID sequence
+        if trade_id is not None and self.last_trade_id is not None:
+            expected_id = self.last_trade_id + 1
+            
+            if trade_id < self.last_trade_id:
+                # Out of order
+                self.out_of_order_count += 1
+                self.issues_detected['out_of_order'] += 1
+                issues.append(f"out_of_order: {trade_id} < {self.last_trade_id}")
+            elif trade_id == self.last_trade_id:
+                # Duplicate
+                self.duplicate_count += 1
+                self.issues_detected['duplicate'] += 1
+                issues.append(f"duplicate: {trade_id}")
+            elif trade_id > expected_id:
+                # Missing trades
+                missing_count = trade_id - expected_id
+                self.missing_trade_ids.extend(range(expected_id, trade_id))
+                self.issues_detected['missing'] += missing_count
+                issues.append(f"missing: {missing_count} trades ({expected_id} to {trade_id-1})")
+        
+        if trade_id is not None:
+            self.last_trade_id = trade_id
+        
+        # Check latency
+        if exchange_timestamp > 0 and client_timestamp > 0:
+            latency_ms = client_timestamp - exchange_timestamp
+            self.latencies.append(latency_ms)
+            
+            if latency_ms > self.alert_threshold_ms:
+                self.latency_spikes.append((client_timestamp / 1000.0, latency_ms))
+                self.issues_detected['latency_spike'] += 1
+                issues.append(f"latency_spike: {latency_ms:.2f}ms > {self.alert_threshold_ms}ms")
+            
+            # Check for negative latency (clock skew)
+            if latency_ms < 0:
+                self.issues_detected['clock_skew'] += 1
+                issues.append(f"clock_skew: {latency_ms:.2f}ms")
+        
+        # Check for stale data
+        if exchange_timestamp > 0:
+            if self.last_exchange_timestamp > 0:
+                time_since_last = exchange_timestamp - self.last_exchange_timestamp
+                
+                # Alert if no data for >5 seconds
+                if time_since_last > 5000:
+                    self.stale_data_events.append((client_timestamp / 1000.0, time_since_last))
+                    self.issues_detected['stale_data'] += 1
+                    issues.append(f"stale_data: {time_since_last:.2f}ms gap")
+            
+            self.last_exchange_timestamp = exchange_timestamp
+        
+        self.last_client_timestamp = client_timestamp
+        self.total_trades_processed += 1
+        
+        # Update quality score
+        self._update_quality_score()
+        
+        return {
+            'has_issues': len(issues) > 0,
+            'issues': issues,
+            'quality_score': self.quality_score,
+            'total_processed': self.total_trades_processed
+        }
+    
+    def _update_quality_score(self):
+        """Update overall quality score based on issues detected."""
+        if self.total_trades_processed == 0:
+            self.quality_score = 100.0
+            return
+        
+        # Start with 100 and deduct for issues
+        score = 100.0
+        
+        # Deduct for missing trades (severe)
+        missing_rate = self.issues_detected['missing'] / self.total_trades_processed
+        score -= missing_rate * 50  # Up to -50 points
+        
+        # Deduct for duplicates (moderate)
+        duplicate_rate = self.issues_detected['duplicate'] / self.total_trades_processed
+        score -= duplicate_rate * 20  # Up to -20 points
+        
+        # Deduct for out of order (moderate)
+        ooo_rate = self.issues_detected['out_of_order'] / self.total_trades_processed
+        score -= ooo_rate * 20  # Up to -20 points
+        
+        # Deduct for latency spikes (minor)
+        spike_rate = self.issues_detected['latency_spike'] / self.total_trades_processed
+        score -= spike_rate * 10  # Up to -10 points
+        
+        self.quality_score = max(0.0, min(100.0, score))
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """
+        Get comprehensive quality summary.
+        
+        Returns:
+            Dictionary with quality metrics
+        """
+        avg_latency = safe_mean(list(self.latencies), 0.0) if self.latencies else 0.0
+        
+        return {
+            'quality_score': self.quality_score,
+            'total_processed': self.total_trades_processed,
+            'issues': dict(self.issues_detected),
+            'missing_trades': len(self.missing_trade_ids),
+            'duplicate_count': self.duplicate_count,
+            'out_of_order_count': self.out_of_order_count,
+            'latency_spikes': len(self.latency_spikes),
+            'stale_data_events': len(self.stale_data_events),
+            'avg_latency_ms': avg_latency,
+            'health_status': self._get_health_status()
+        }
+    
+    def _get_health_status(self) -> str:
+        """Get human-readable health status."""
+        if self.quality_score >= 95:
+            return "EXCELLENT"
+        elif self.quality_score >= 85:
+            return "GOOD"
+        elif self.quality_score >= 70:
+            return "FAIR"
+        elif self.quality_score >= 50:
+            return "POOR"
+        else:
+            return "CRITICAL"
+
+
+# ============================================================
+# ORDER FLOW IMBALANCE CALCULATOR
+# ============================================================
+
+class OrderFlowImbalanceCalculator:
+    """
+    Calculate Order Flow Imbalance (OFI) - a key microstructure metric.
+    
+    OFI measures the net flow of limit orders in the order book:
+    - Positive OFI = More buying pressure (bid insertions > ask insertions)
+    - Negative OFI = More selling pressure (ask insertions > bid insertions)
+    
+    References:
+    - Cont, Kukanov, Stoikov (2014) "The Price Impact of Order Book Events"
+    - Easley, López de Prado, O'Hara (2012) "Flow Toxicity and Liquidity"
+    """
+    
+    def __init__(self, num_levels: int = 10):
+        """
+        Initialize OFI calculator.
+        
+        Args:
+            num_levels: Number of price levels to track (default: 10)
+        """
+        self.num_levels = num_levels
+        
+        # Previous order book state
+        self.prev_bids = {}  # {price: quantity}
+        self.prev_asks = {}  # {price: quantity}
+        
+        # OFI history
+        self.ofi_history = deque(maxlen=1000)
+        self.ofi_by_level = {i: deque(maxlen=100) for i in range(num_levels)}
+        
+        # Correlations
+        self.ofi_price_changes = deque(maxlen=500)  # (ofi, price_change)
+        
+    def calculate_ofi(self, timestamp: float, bids: List[Tuple[float, float]], 
+                     asks: List[Tuple[float, float]], 
+                     mid_price: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Calculate Order Flow Imbalance from current order book state.
+        
+        Args:
+            timestamp: Current timestamp
+            bids: List of (price, quantity) tuples for bids
+            asks: List of (price, quantity) tuples for asks
+            mid_price: Optional mid price for price change tracking
+            
+        Returns:
+            Dictionary with OFI metrics
+        """
+        # Convert to dictionaries for easy comparison
+        curr_bids = {p: q for p, q in bids[:self.num_levels]}
+        curr_asks = {p: q for p, q in asks[:self.num_levels]}
+        
+        # Calculate OFI
+        bid_flow = 0.0
+        ask_flow = 0.0
+        
+        # Bid side: Positive flow from insertions, negative from deletions
+        for price in curr_bids:
+            prev_qty = self.prev_bids.get(price, 0.0)
+            curr_qty = curr_bids[price]
+            bid_flow += max(0, curr_qty - prev_qty)  # Insertions
+        
+        for price in self.prev_bids:
+            if price not in curr_bids:
+                bid_flow -= self.prev_bids[price]  # Full deletion
+            elif curr_bids[price] < self.prev_bids[price]:
+                bid_flow -= (self.prev_bids[price] - curr_bids[price])  # Partial deletion
+        
+        # Ask side: Negative flow from insertions, positive from deletions
+        for price in curr_asks:
+            prev_qty = self.prev_asks.get(price, 0.0)
+            curr_qty = curr_asks[price]
+            ask_flow -= max(0, curr_qty - prev_qty)  # Insertions (negative for asks)
+        
+        for price in self.prev_asks:
+            if price not in curr_asks:
+                ask_flow += self.prev_asks[price]  # Full deletion (positive for asks)
+            elif curr_asks[price] < self.prev_asks[price]:
+                ask_flow += (self.prev_asks[price] - curr_asks[price])  # Partial deletion
+        
+        # Total OFI
+        ofi = bid_flow + ask_flow
+        
+        # Store in history
+        self.ofi_history.append((timestamp, ofi))
+        
+        # Update previous state
+        self.prev_bids = curr_bids
+        self.prev_asks = curr_asks
+        
+        # Calculate statistics
+        recent_ofi = [ofi_val for _, ofi_val in list(self.ofi_history)[-100:]]
+        avg_ofi = safe_mean(recent_ofi, 0.0)
+        std_ofi = safe_std(recent_ofi, 0.0)
+        
+        # Normalize OFI (z-score)
+        normalized_ofi = (ofi - avg_ofi) / std_ofi if std_ofi > 0 else 0.0
+        
+        return {
+            'ofi': ofi,
+            'ofi_normalized': normalized_ofi,
+            'bid_flow': bid_flow,
+            'ask_flow': ask_flow,
+            'avg_ofi': avg_ofi,
+            'std_ofi': std_ofi,
+            'ofi_direction': 'BUY' if ofi > 0 else 'SELL' if ofi < 0 else 'NEUTRAL'
+        }
+    
+    def get_ofi_statistics(self) -> Dict[str, Any]:
+        """Get comprehensive OFI statistics."""
+        if not self.ofi_history:
+            return {}
+        
+        ofi_values = [ofi for _, ofi in self.ofi_history]
+        
+        return {
+            'mean_ofi': safe_mean(ofi_values, 0.0),
+            'std_ofi': safe_std(ofi_values, 0.0),
+            'min_ofi': safe_min(ofi_values, 0.0),
+            'max_ofi': safe_max(ofi_values, 0.0),
+            'positive_ofi_ratio': sum(1 for ofi in ofi_values if ofi > 0) / len(ofi_values),
+            'samples': len(ofi_values)
+        }
 
 
 # ============================================================
