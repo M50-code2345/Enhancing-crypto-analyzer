@@ -11782,7 +11782,17 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Verify all required components are defined
+    try:
+        _ = MarketClient
+        _ = USDT_WS_URL
+        _ = USDT_REST
+        _ = POLL_INTERVAL
+        asyncio.run(main())
+    except NameError as e:
+        print(f"Error: Required component not defined: {e}")
+        print("Please ensure you run all cells in order from the beginning of the file.")
+        print("In Jupyter: Use 'Kernel → Restart & Run All' to execute the entire file.")
 
 
 # ============================================================
@@ -14377,4 +14387,16 @@ Key Metrics:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Verify all required components are defined for Ray system
+    try:
+        _ = MarketAnalyzerOrchestrator
+        _ = create_default_config
+        asyncio.run(main())
+    except NameError as e:
+        print(f"Error: Required component not defined: {e}")
+        print("Please ensure you run all cells in order from the beginning of the file.")
+        print("In Jupyter: Use 'Kernel → Restart & Run All' to execute the entire file.")
+        print("\nNote: This file contains two main() functions:")
+        print("  1. Line 11768: Basic MarketClient implementation")
+        print("  2. Line ~14227: Ray distributed system implementation")
+        print("Make sure the correct implementation's classes are defined before running main().")
