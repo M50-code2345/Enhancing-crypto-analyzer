@@ -16,17 +16,35 @@ logger = logging.getLogger(__name__)
 # SAFETY HELPERS - HIGH PRIORITY DIAGNOSTIC FIXES
 # ============================================================
 
-def safe_divide(numerator, denominator, default=0.0, epsilon=1e-10):
+def safe_divide(numerator: float, denominator: float, default: float = 0.0, epsilon: float = 1e-10) -> float:
     """
     Safe division with zero-check and epsilon guard.
     Prevents division by zero and handles edge cases.
+    
+    Args:
+        numerator: The numerator value
+        denominator: The denominator value
+        default: Default value to return if denominator is near zero
+        epsilon: Minimum absolute value for denominator
+        
+    Returns:
+        Division result or default value
     """
     if abs(denominator) < epsilon:
         return default
     return numerator / denominator
 
-def safe_mean(collection, default=0.0):
-    """Safe mean calculation with empty collection check."""
+def safe_mean(collection: List[float], default: float = 0.0) -> float:
+    """
+    Safe mean calculation with empty collection check.
+    
+    Args:
+        collection: List of numeric values
+        default: Default value to return if calculation fails
+        
+    Returns:
+        Mean of collection or default value
+    """
     if not collection or len(collection) == 0:
         return default
     try:
@@ -34,8 +52,17 @@ def safe_mean(collection, default=0.0):
     except (ValueError, TypeError):
         return default
 
-def safe_std(collection, default=0.0):
-    """Safe standard deviation with empty collection check."""
+def safe_std(collection: List[float], default: float = 0.0) -> float:
+    """
+    Safe standard deviation with empty collection check.
+    
+    Args:
+        collection: List of numeric values
+        default: Default value to return if calculation fails
+        
+    Returns:
+        Standard deviation or default value
+    """
     if not collection or len(collection) < 2:
         return default
     try:
@@ -43,8 +70,17 @@ def safe_std(collection, default=0.0):
     except (ValueError, TypeError):
         return default
 
-def safe_min(collection, default=0.0):
-    """Safe minimum with empty collection check."""
+def safe_min(collection: List[float], default: float = 0.0) -> float:
+    """
+    Safe minimum with empty collection check.
+    
+    Args:
+        collection: List of numeric values
+        default: Default value to return if collection is empty
+        
+    Returns:
+        Minimum value or default
+    """
     if not collection or len(collection) == 0:
         return default
     try:
@@ -52,8 +88,17 @@ def safe_min(collection, default=0.0):
     except (ValueError, TypeError):
         return default
 
-def safe_max(collection, default=0.0):
-    """Safe maximum with empty collection check."""
+def safe_max(collection: List[float], default: float = 0.0) -> float:
+    """
+    Safe maximum with empty collection check.
+    
+    Args:
+        collection: List of numeric values
+        default: Default value to return if collection is empty
+        
+    Returns:
+        Maximum value or default
+    """
     if not collection or len(collection) == 0:
         return default
     try:
@@ -61,7 +106,7 @@ def safe_max(collection, default=0.0):
     except (ValueError, TypeError):
         return default
 
-def is_data_fresh(timestamp, max_age_seconds=5.0):
+def is_data_fresh(timestamp: Optional[Any], max_age_seconds: float = 5.0) -> bool:
     """
     Check if data is fresh (less than max_age_seconds old).
     Returns True if fresh, False if stale.
@@ -146,10 +191,19 @@ def validate_and_fix_orderbook(bids: List[Tuple[float, float]],
     return valid_bids, valid_asks
 
 
-def clamp_value(value, min_val, max_val, default=None):
+def clamp_value(value: Optional[float], min_val: float, max_val: float, default: Optional[float] = None) -> float:
     """
     Clamp value to be within [min_val, max_val].
     Returns default if value is None or invalid.
+    
+    Args:
+        value: Value to clamp
+        min_val: Minimum allowed value
+        max_val: Maximum allowed value
+        default: Default value if input is invalid
+        
+    Returns:
+        Clamped value within bounds
     """
     if value is None or not isinstance(value, (int, float)):
         return default if default is not None else min_val
@@ -159,10 +213,19 @@ def clamp_value(value, min_val, max_val, default=None):
     
     return max(min_val, min(max_val, value))
 
-def validate_bounds(value, min_val=-1e10, max_val=1e10, name="value"):
+def validate_bounds(value: Optional[float], min_val: float = -1e10, max_val: float = 1e10, name: str = "value") -> float:
     """
     Validate that a calculated metric is within reasonable bounds.
     Returns clamped value and logs warning if out of bounds.
+    
+    Args:
+        value: Value to validate
+        min_val: Minimum allowed value
+        max_val: Maximum allowed value
+        name: Name of the value for logging
+        
+    Returns:
+        Validated and clamped value
     """
     if value is None:
         return 0.0
