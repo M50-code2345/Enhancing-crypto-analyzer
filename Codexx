@@ -13075,6 +13075,11 @@ class IntegratedMarketMovementAnalyzer:
     PRESSURE_DECAY_FACTOR = 0.95        # Exponential decay factor for pressure scores
     STRONG_PRESSURE_THRESHOLD = 20.0    # Threshold for "STRONG" market mover classification
     MODERATE_PRESSURE_THRESHOLD = 10.0  # Threshold for "MODERATE" market mover classification
+    ORDERBOOK_DEPTH_LEVELS = 10         # Number of orderbook levels to analyze for depth changes
+    MAX_DEPTH_PRESSURE_SCORE = 10       # Maximum pressure score from depth changes
+    DEPTH_PRESSURE_MULTIPLIER = 0.1     # Multiplier for depth change pressure scoring
+    MAX_TRADE_PRESSURE_SCORE = 5        # Maximum pressure score from individual trades
+    MARKET_IMPACT_WINDOW = 100          # Number of recent trades for market impact calculation
     
     def __init__(self, window_seconds: int = 30):
         """
@@ -13189,12 +13194,12 @@ class IntegratedMarketMovementAnalyzer:
             return
         
         # Calculate depth changes at top levels (safely handle empty lists)
-        current_bid_depth = sum(q for p, q in bids[:10]) if bids else 0
-        prev_bid_depth = sum(q for p, q in prev_bids[:10]) if prev_bids else 0
+        current_bid_depth = sum(q for p, q in bids[:self.ORDERBOOK_DEPTH_LEVELS]) if bids else 0
+        prev_bid_depth = sum(q for p, q in prev_bids[:self.ORDERBOOK_DEPTH_LEVELS]) if prev_bids else 0
         bid_depth_change = current_bid_depth - prev_bid_depth
         
-        current_ask_depth = sum(q for p, q in asks[:10]) if asks else 0
-        prev_ask_depth = sum(q for p, q in prev_asks[:10]) if prev_asks else 0
+        current_ask_depth = sum(q for p, q in asks[:self.ORDERBOOK_DEPTH_LEVELS]) if asks else 0
+        prev_ask_depth = sum(q for p, q in prev_asks[:self.ORDERBOOK_DEPTH_LEVELS]) if prev_asks else 0
         ask_depth_change = current_ask_depth - prev_ask_depth
         
         # Increasing bid depth = buying interest
@@ -13204,10 +13209,12 @@ class IntegratedMarketMovementAnalyzer:
         
         if bid_depth_change > 0 and ask_depth_change < 0:
             # Strong buying signal: bids added, asks removed
-            self.buyer_pressure_score += min(10, abs(bid_depth_change) * 0.1)
+            self.buyer_pressure_score += min(self.MAX_DEPTH_PRESSURE_SCORE, 
+                                           abs(bid_depth_change) * self.DEPTH_PRESSURE_MULTIPLIER)
         elif ask_depth_change > 0 and bid_depth_change < 0:
             # Strong selling signal: asks added, bids removed
-            self.seller_pressure_score += min(10, abs(ask_depth_change) * 0.1)
+            self.seller_pressure_score += min(self.MAX_DEPTH_PRESSURE_SCORE, 
+                                            abs(ask_depth_change) * self.DEPTH_PRESSURE_MULTIPLIER)
             
     def _analyze_book_pressure(self, timestamp: float, best_bid: float, best_ask: float,
                               bid_qty: float, ask_qty: float):
@@ -13236,12 +13243,14 @@ class IntegratedMarketMovementAnalyzer:
             # Buyer was maker (passive), seller was taker (aggressive)
             self.aggressive_seller_volume += quantity
             self.passive_buyer_volume += quantity
-            self.seller_pressure_score += min(5, notional / self.NOTIONAL_PRESSURE_DIVISOR)
+            self.seller_pressure_score += min(self.MAX_TRADE_PRESSURE_SCORE, 
+                                            notional / self.NOTIONAL_PRESSURE_DIVISOR)
         else:
             # Seller was maker (passive), buyer was taker (aggressive)
             self.aggressive_buyer_volume += quantity
             self.passive_seller_volume += quantity
-            self.buyer_pressure_score += min(5, notional / self.NOTIONAL_PRESSURE_DIVISOR)
+            self.buyer_pressure_score += min(self.MAX_TRADE_PRESSURE_SCORE, 
+                                           notional / self.NOTIONAL_PRESSURE_DIVISOR)
             
         # Detect large institutional trades
         if notional > self.INSTITUTIONAL_THRESHOLD:
@@ -13368,8 +13377,8 @@ class IntegratedMarketMovementAnalyzer:
         aggressive_buy_ratio = (self.aggressive_buyer_volume / total_aggressive * 100) if total_aggressive > 0 else 50.0
         
         # Calculate average market impact
-        avg_buy_impact = safe_mean(list(self.buy_market_impact)[-100:], 0.0) if self.buy_market_impact else 0.0
-        avg_sell_impact = safe_mean(list(self.sell_market_impact)[-100:], 0.0) if self.sell_market_impact else 0.0
+        avg_buy_impact = safe_mean(list(self.buy_market_impact)[-self.MARKET_IMPACT_WINDOW:], 0.0) if self.buy_market_impact else 0.0
+        avg_sell_impact = safe_mean(list(self.sell_market_impact)[-self.MARKET_IMPACT_WINDOW:], 0.0) if self.sell_market_impact else 0.0
         
         # Determine who is moving the market
         if self.net_market_pressure > self.STRONG_PRESSURE_THRESHOLD:
