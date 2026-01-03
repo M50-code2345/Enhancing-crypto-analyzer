@@ -8595,15 +8595,6 @@ class AdvancedOrderFlow:
             print(f"         • Standard position sizing appropriate")
         
         print(f"\n   {'='*70}")
-        
-        # ═══════════════════════════════════════════════════════════════════════
-        # Display Enhanced Liquidity Heatmap Analysis after TRADING IMPLICATIONS
-        # ═══════════════════════════════════════════════════════════════════════
-        if self.liquidity_heatmap_analyzer:
-            current_time = datetime.now(timezone.utc)
-            if (current_time - self.last_liquidity_display).total_seconds() >= 30:
-                self.last_liquidity_display = current_time
-                self._print_enhanced_liquidity_analysis()
 
 
 
@@ -10093,6 +10084,14 @@ class MarketClient:
             # Print Liquidity Vacuum Detection (air pockets, depth deserts, liquidity traps)
             if self.advanced_orderflow:
                 self.advanced_orderflow._print_liquidity_vacuum(snapshot)
+            
+            # Display Enhanced Liquidity Heatmap Analysis after TRADING IMPLICATIONS
+            if hasattr(self, 'liquidity_heatmap_analyzer') and self.liquidity_heatmap_analyzer:
+                current_time = datetime.now(timezone.utc)
+                if hasattr(self, 'last_liquidity_display'):
+                    if (current_time - self.last_liquidity_display).total_seconds() >= 30:
+                        self.last_liquidity_display = current_time
+                        self._print_enhanced_liquidity_analysis()
             
             if PRINT_ALL_FEATURES:
                 # Print ALL features from all remaining feature sets
