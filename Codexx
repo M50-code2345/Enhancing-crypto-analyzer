@@ -9509,7 +9509,8 @@ class MarketClient:
                 history_seconds=300.0     # 5-minute rolling window
             )
             self.last_advanced_snapshot = datetime.now(timezone.utc)
-            self.last_liquidity_display = datetime.now(timezone.utc)
+            # Initialize to past time so first snapshot displays immediately
+            self.last_liquidity_display = datetime.now(timezone.utc) - timedelta(seconds=31)
             print(f"[{self.name}] ✅ Advanced Order Flow Analysis enabled (30s intervals)")
             print(f"[{self.name}] ✅ Enhanced Liquidity Heatmap Analyzer enabled")
         else:
