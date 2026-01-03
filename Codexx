@@ -9504,11 +9504,18 @@ class MarketClient:
                 max_history=100
             )
             self.feature_extractor = FeatureExtractor(window_size=100)
+            self.liquidity_heatmap_analyzer = EnhancedLiquidityHeatmapAnalyzer(
+                price_bin_size=10.0,      # $10 bins for heatmap
+                history_seconds=300.0     # 5-minute rolling window
+            )
             self.last_advanced_snapshot = datetime.now(timezone.utc)
+            self.last_liquidity_display = datetime.now(timezone.utc)
             print(f"[{self.name}] ✅ Advanced Order Flow Analysis enabled (30s intervals)")
+            print(f"[{self.name}] ✅ Enhanced Liquidity Heatmap Analyzer enabled")
         else:
             self.advanced_orderflow = None
             self.feature_extractor = None
+            self.liquidity_heatmap_analyzer = None
 
         # ─── Price‐Action Buffers ────────────────────────────
         self.prev_bar       = None  # store previous bar dict
@@ -9744,6 +9751,10 @@ class MarketClient:
                 
                 # Enable full depth mode to merge with 1000-level REST data
                 self.advanced_orderflow.process_depth_snapshot(ts_now, bids, asks, use_full_depth=True)
+                
+                # Feed to Enhanced Liquidity Heatmap Analyzer
+                if self.liquidity_heatmap_analyzer:
+                    self.liquidity_heatmap_analyzer.update(ts_now, bids, asks)
                 
                 # Track latency: exchange timestamp vs client timestamp
                 if "E" in d:  # Event timestamp from exchange
@@ -11005,6 +11016,105 @@ class MarketClient:
                     print(f"           Order Modifications: {modifications}")
         
         print(f"        ✅ Enhanced precision with 5000+ sample buffers and full depth tracking")
+        
+        # ═══════════════════════════════════════════════════════════════════════
+        # Display Enhanced Liquidity Heatmap Analysis
+        # ═══════════════════════════════════════════════════════════════════════
+        if self.liquidity_heatmap_analyzer:
+            current_time = datetime.now(timezone.utc)
+            if (current_time - self.last_liquidity_display).total_seconds() >= 30:
+                self.last_liquidity_display = current_time
+                self._print_enhanced_liquidity_analysis()
+
+    def _print_enhanced_liquidity_analysis(self):
+        """Display comprehensive liquidity heatmap analysis."""
+        if not self.liquidity_heatmap_analyzer:
+            return
+        
+        try:
+            summary = self.liquidity_heatmap_analyzer.get_liquidity_summary()
+            
+            print(f"\n📊 ENHANCED LIQUIDITY HEATMAP ANALYSIS:")
+            print(f"══════════════════════════════════════════════════════════════════════")
+            
+            # Section 1: Liquidity Walls
+            walls = summary.get('liquidity_walls', {})
+            bid_walls = walls.get('bid_walls', [])
+            ask_walls = walls.get('ask_walls', [])
+            
+            print(f"\n   📊 LIQUIDITY WALLS (Support & Resistance):")
+            if bid_walls:
+                print(f"      🟢 BID WALLS:")
+                for wall in bid_walls[:3]:  # Top 3
+                    price = wall['price']
+                    volume = wall['volume']
+                    strength = wall['strength']
+                    print(f"         • ${price:,.2f}: {volume:.1f} BTC ({strength:.1f}x avg) - STRONG SUPPORT")
+            else:
+                print(f"      🟢 No significant bid walls detected")
+            
+            if ask_walls:
+                print(f"      🔴 ASK WALLS:")
+                for wall in ask_walls[:3]:  # Top 3
+                    price = wall['price']
+                    volume = wall['volume']
+                    strength = wall['strength']
+                    print(f"         • ${price:,.2f}: {volume:.1f} BTC ({strength:.1f}x avg) - STRONG RESISTANCE")
+            else:
+                print(f"      🔴 No significant ask walls detected")
+            
+            total_walls = walls.get('total_walls', 0)
+            print(f"      Total walls: {total_walls}")
+            
+            # Section 2: Absorption Rate
+            absorption = summary.get('absorption', {})
+            avg_rate = absorption.get('avg_rate', 0)
+            active_events = absorption.get('active_events', 0)
+            
+            print(f"\n   📉 ABSORPTION RATE:")
+            print(f"      Average: {avg_rate:.1f} BTC/sec")
+            print(f"      Active events: {active_events}")
+            
+            if absorption.get('last_event'):
+                last = absorption['last_event']
+                print(f"      Last event: ${last['price']:,.2f} absorbed {last['volume']:.1f} BTC at {last['rate']:.1f} BTC/sec")
+            
+            # Section 3: Vacuum Zones
+            vacuum = summary.get('vacuum_zones', {})
+            bid_gaps = vacuum.get('bid_gaps', [])
+            ask_gaps = vacuum.get('ask_gaps', [])
+            
+            print(f"\n   🌪️ VACUUM ZONES (Low Liquidity):")
+            print(f"      Bid side: {len(bid_gaps)} gaps (avg ${vacuum.get('avg_bid_gap', 0):.1f})")
+            print(f"      Ask side: {len(ask_gaps)} gaps (avg ${vacuum.get('avg_ask_gap', 0):.1f})")
+            
+            if len(ask_gaps) > len(bid_gaps) and vacuum.get('avg_ask_gap', 0) > 50:
+                print(f"      ⚠️ HIGH SLIPPAGE RISK on ask side")
+            elif len(bid_gaps) > len(ask_gaps) and vacuum.get('avg_bid_gap', 0) > 50:
+                print(f"      ⚠️ HIGH SLIPPAGE RISK on bid side")
+            
+            # Section 4: Concentration Metrics
+            concentration = summary.get('concentration', {})
+            score = concentration.get('score', 0)
+            interpretation = concentration.get('interpretation', 'N/A')
+            top_support = concentration.get('top_support', [])
+            top_resistance = concentration.get('top_resistance', [])
+            
+            print(f"\n   🎯 LIQUIDITY CONCENTRATION:")
+            print(f"      Score: {score:.2f} ({interpretation})")
+            
+            if top_support:
+                print(f"      Top Support Levels:")
+                for i, (price, vol) in enumerate(top_support[:3], 1):
+                    print(f"         {i}. ${price:,.2f}: {vol:.1f} BTC")
+            
+            if top_resistance:
+                print(f"      Top Resistance Levels:")
+                for i, (price, vol) in enumerate(top_resistance[:3], 1):
+                    print(f"         {i}. ${price:,.2f}: {vol:.1f} BTC")
+            
+        except Exception as e:
+            logger.warning(f"Error in liquidity heatmap display: {e}", exc_info=True)
 
     def calc_order_book_imbalance(self, depth):
         bids = [(float(p), float(q)) for p, q in depth.get("bids", [])]
