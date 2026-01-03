@@ -12292,7 +12292,23 @@ class EnhancedMarketAnalyzer:
 # RAY IMPORTS AND SETUP
 # ============================================================
 
-import ray
+# Ray is an optional dependency for the distributed system implementation
+# If not installed, only the basic MarketClient implementation will be available
+try:
+    import ray
+    RAY_AVAILABLE = True
+except ModuleNotFoundError:
+    RAY_AVAILABLE = False
+    print("=" * 70)
+    print("INFO: Ray library not installed")
+    print("=" * 70)
+    print("The distributed system features require Ray.")
+    print("To install: pip install ray")
+    print("")
+    print("The basic MarketClient implementation (first main() function)")
+    print("is still available and does not require Ray.")
+    print("=" * 70)
+
 import aiohttp
 import websockets
 
@@ -12351,6 +12367,8 @@ def safe_max(collection: List[float], default: float = 0.0) -> float:
 # ============================================================
 # CONFIGURATION
 # ============================================================
+# Note: The classes below use Ray decorators (@ray.remote) which require
+# Ray to be installed. They are defined here but will only work if RAY_AVAILABLE=True
 
 @dataclass
 class ActorConfig:
@@ -14387,16 +14405,28 @@ Key Metrics:
 
 
 if __name__ == "__main__":
-    # Verify all required components are defined for Ray system
-    try:
-        _ = MarketAnalyzerOrchestrator
-        _ = create_default_config
-        asyncio.run(main())
-    except NameError as e:
-        print(f"Error: Required component not defined: {e}")
-        print("Please ensure you run all cells in order from the beginning of the file.")
-        print("In Jupyter: Use 'Kernel → Restart & Run All' to execute the entire file.")
-        print("\nNote: This file contains two main() functions:")
-        print("  1. Line 11768: Basic MarketClient implementation")
-        print("  2. Line ~14227: Ray distributed system implementation")
-        print("Make sure the correct implementation's classes are defined before running main().")
+    # Verify Ray is available for distributed system
+    if not RAY_AVAILABLE:
+        print("=" * 70)
+        print("ERROR: Cannot run Ray distributed system")
+        print("=" * 70)
+        print("The Ray library is required but not installed.")
+        print("\nTo install Ray:")
+        print("  pip install ray")
+        print("\nAlternatively, use the basic MarketClient implementation")
+        print("(first main() function at line 11768) which doesn't require Ray.")
+        print("=" * 70)
+    else:
+        # Verify all required components are defined for Ray system
+        try:
+            _ = MarketAnalyzerOrchestrator
+            _ = create_default_config
+            asyncio.run(main())
+        except NameError as e:
+            print(f"Error: Required component not defined: {e}")
+            print("Please ensure you run all cells in order from the beginning of the file.")
+            print("In Jupyter: Use 'Kernel → Restart & Run All' to execute the entire file.")
+            print("\nNote: This file contains two main() functions:")
+            print("  1. Line 11768: Basic MarketClient implementation")
+            print("  2. Line ~14227: Ray distributed system implementation")
+            print("Make sure the correct implementation's classes are defined before running main().")
